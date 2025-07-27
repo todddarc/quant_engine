@@ -214,8 +214,8 @@ def generate_prices(calendar: pd.DatetimeIndex, tickers: List[str],
                                 day_date=date_tm1)
         
         # Align proxies to active tickers; fill missing with 0
-        mom_z = mom_z.reindex(active).fillna(0.0)
-        val_z = val_z.reindex(active).fillna(0.0)
+        mom_z = mom_z.reindex(active).astype(float).fillna(0.0)
+        val_z = val_z.reindex(active).astype(float).fillna(0.0)
         
         # Generate components
         market_t = np.random.normal(loc=MARKET_MEAN, scale=MARKET_STD)
