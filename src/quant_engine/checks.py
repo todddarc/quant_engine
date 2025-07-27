@@ -5,9 +5,11 @@ Implements comprehensive safety checks for data quality, schema validation,
 turnover limits, and sector exposure constraints.
 """
 
+from __future__ import annotations
+from typing import Dict, Any, List, Tuple, Optional, Union, Iterable
 import pandas as pd
 import numpy as np
-from typing import Dict, Any, List, Tuple, Optional, Union
+from pathlib import Path
 
 
 def check_schema(
@@ -222,43 +224,56 @@ def check_data_missingness(df: pd.DataFrame, threshold: float = 0.1) -> Dict[str
     raise NotImplementedError("check_data_missingness not implemented")
 
 
-def check_schema_drift(df: pd.DataFrame, expected_schema: Dict[str, type], 
-                      name: str) -> bool:
+def check_schema_drift(df: pd.DataFrame, expected_schema: Iterable[str], name: str) -> Dict[str, Any]:
     """
-    Check for schema drift in DataFrame.
-    
-    Args:
-        df: DataFrame to check
-        expected_schema: Expected column types
-        name: Data source name for error messages
-        
+    Compare the columns of `df` to `expected_schema` and report drift.
     Returns:
-        True if schema is valid
-        
-    Raises:
-        ValueError: If schema drift detected
-        NotImplementedError: Function not yet implemented
+      {
+        "name": name,
+        "expected": list[str],
+        "actual": list[str],
+        "added": list[str],      # in actual not in expected
+        "removed": list[str],    # in expected not in actual
+        "ok": bool               # True if no drift (added==[] and removed==[])
+      }
+    Notes:
+    - This is WARN-only. Use in report; never block trading.
     """
-    raise NotImplementedError("check_schema_drift not implemented")
+    exp = [str(c) for c in list(expected_schema)]
+    act = [str(c) for c in list(df.columns)]
+    added = sorted([c for c in act if c not in exp])
+    removed = sorted([c for c in exp if c not in act])
+    return {
+        "name": name,
+        "expected": exp,
+        "actual": act,
+        "added": added,
+        "removed": removed,
+        "ok": (len(added) == 0 and len(removed) == 0),
+    }
 
-
-def check_extreme_values(series: pd.Series, method: str = 'iqr', 
-                        multiplier: float = 3.0) -> List[Any]:
+def check_extreme_values(series: pd.Series, method: str = "zscore", multiplier: float = 6.0) -> Dict[str, Any]:
     """
-    Check for extreme values using specified method.
-    
-    Args:
-        series: Series to check
-        method: Method to use ('iqr', 'zscore', 'percentile')
-        multiplier: Multiplier for outlier detection
-        
+    Flag extreme values in a 1D series. WARN-only.
     Returns:
-        List of extreme values found
-        
-    Raises:
-        NotImplementedError: Function not yet implemented
+      {
+        "n": int, "n_extreme": int, "indices": list[str], "threshold": float
+      }
+    method: "zscore" only (for now). Ignores NaNs; uses sample mean/std.
     """
-    raise NotImplementedError("check_extreme_values not implemented")
+    x = pd.to_numeric(series, errors="coerce")
+    x = x[np.isfinite(x)]
+    n = int(x.shape[0])
+    if n == 0:
+        return {"n": 0, "n_extreme": 0, "indices": [], "threshold": float("nan")}
+    mu = float(x.mean())
+    sd = float(x.std(ddof=1)) if n > 1 else 0.0
+    if sd <= 0:
+        return {"n": n, "n_extreme": 0, "indices": [], "threshold": float("inf")}
+    z = (series - mu) / sd
+    mask = z.abs() > float(multiplier)
+    idx = series.index[mask.fillna(False)]
+    return {"n": n, "n_extreme": int(mask.sum()), "indices": [str(i) for i in idx], "threshold": float(multiplier)}
 
 
 def run_all_checks(prices_df: pd.DataFrame, fundamentals_df: pd.DataFrame,
