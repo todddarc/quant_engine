@@ -8,6 +8,8 @@ import pandas as pd
 import numpy as np
 import logging
 import yaml
+import os
+import random
 from pathlib import Path
 from typing import Dict, Any, Optional, Union
 from dataclasses import dataclass
@@ -43,20 +45,32 @@ class Config:
             self.signal_weights = {'momentum': 0.5, 'value': 0.5}
 
 
-def setup_logging(level: str = 'INFO') -> logging.Logger:
+def setup_logging(level: str = "INFO", fmt: Optional[str] = None) -> None:
     """
-    Setup logging configuration.
+    Configure root logger once. Safe to call multiple times.
+    - level: "DEBUG"|"INFO"|"WARNING"|"ERROR"|"CRITICAL"
+    - fmt default: "%(asctime)s %(levelname)s %(name)s - %(message)s"
+    """
+    # Map level string, default to INFO
+    level_map = {
+        "DEBUG": logging.DEBUG,
+        "INFO": logging.INFO,
+        "WARNING": logging.WARNING,
+        "ERROR": logging.ERROR,
+        "CRITICAL": logging.CRITICAL
+    }
+    log_level = level_map.get(level.upper(), logging.INFO)
     
-    Args:
-        level: Logging level
-        
-    Returns:
-        Configured logger
-        
-    Raises:
-        NotImplementedError: Function not yet implemented
-    """
-    raise NotImplementedError("setup_logging not implemented")
+    # Remove existing handlers on root to avoid duplicate logs
+    for handler in logging.root.handlers[:]:
+        logging.root.removeHandler(handler)
+    
+    # Set default format if not provided
+    if fmt is None:
+        fmt = "%(asctime)s %(levelname)s %(name)s - %(message)s"
+    
+    # Configure logging
+    logging.basicConfig(level=log_level, format=fmt)
 
 
 def load_config(config_path: Path) -> Config:
@@ -132,34 +146,67 @@ def generate_report(signal_ic: pd.Series, decile_returns: pd.DataFrame,
     raise NotImplementedError("generate_report not implemented")
 
 
-def validate_config(config: Config) -> bool:
+def validate_config(cfg: Dict[str, Any]) -> None:
     """
-    Validate configuration parameters.
+    Fail fast if required keys are missing. Raise ValueError with a helpful message.
+    Required (by our code path):
+      data.prices_path, data.fundamentals_path, data.sectors_path, data.holdings_path
+      signals.momentum.lookback, signals.momentum.gap
+      signals.value.min_lag_days
+      risk.cov_lookback_days, risk.shrink_lambda, risk.diag_load
+      optimization.w_max, optimization.sector_cap, optimization.turnover_cap, optimization.risk_aversion
+      paths.output_dir  (we allow a default if absent)
+    Tolerate legacy blocks; only check keys we actually read.
+    """
+    missing_keys = []
     
-    Args:
-        config: Configuration to validate
-        
-    Returns:
-        True if configuration is valid
-        
-    Raises:
-        ValueError: If configuration is invalid
-        NotImplementedError: Function not yet implemented
-    """
-    raise NotImplementedError("validate_config not implemented")
+    # Check data paths
+    data_cfg = cfg.get("data", {})
+    required_data = ["prices_path", "fundamentals_path", "sectors_path", "holdings_path"]
+    for key in required_data:
+        if key not in data_cfg:
+            missing_keys.append(f"data.{key}")
+    
+    # Check signals config
+    signals_cfg = cfg.get("signals", {})
+    momentum_cfg = signals_cfg.get("momentum", {})
+    value_cfg = signals_cfg.get("value", {})
+    
+    required_momentum = ["lookback", "gap"]
+    for key in required_momentum:
+        if key not in momentum_cfg:
+            missing_keys.append(f"signals.momentum.{key}")
+    
+    if "min_lag_days" not in value_cfg:
+        missing_keys.append("signals.value.min_lag_days")
+    
+    # Check risk config
+    risk_cfg = cfg.get("risk", {})
+    required_risk = ["cov_lookback_days", "shrink_lambda", "diag_load"]
+    for key in required_risk:
+        if key not in risk_cfg:
+            missing_keys.append(f"risk.{key}")
+    
+    # Check optimization config
+    opt_cfg = cfg.get("optimization", {})
+    required_opt = ["w_max", "sector_cap", "turnover_cap", "risk_aversion"]
+    for key in required_opt:
+        if key not in opt_cfg:
+            missing_keys.append(f"optimization.{key}")
+    
+    # paths.output_dir is optional (has default)
+    
+    if missing_keys:
+        raise ValueError(f"Missing required config keys: {', '.join(missing_keys)}")
 
 
-def set_random_seed(seed: int = 42) -> None:
+def set_random_seed(seed: int) -> None:
     """
-    Set random seed for reproducible results.
-    
-    Args:
-        seed: Random seed value
-        
-    Raises:
-        NotImplementedError: Function not yet implemented
+    Set numpy and python's random seeds (and PYTHONHASHSEED env) for determinism.
     """
-    raise NotImplementedError("set_random_seed not implemented") 
+    np.random.seed(seed)
+    random.seed(seed)
+    os.environ["PYTHONHASHSEED"] = str(seed) 
 
 
 def compute_next_period_returns(

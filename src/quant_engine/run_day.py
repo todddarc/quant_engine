@@ -23,7 +23,8 @@ from .prep import winsorize, zscore, sector_neutralize
 from .risk import returns_from_prices, shrink_cov
 from .optimize import mean_variance_opt
 from .checks import check_schema, check_missingness, check_turnover, check_sector_exposure, aggregate_checks
-from .utils import compute_next_period_returns, cross_sectional_ic, compute_ic_series, summarize_ic, decile_portfolio_returns
+from .utils import compute_next_period_returns, cross_sectional_ic, compute_ic_series, summarize_ic, decile_portfolio_returns, setup_logging, validate_config, set_random_seed
+from .risk import returns_from_prices, shrink_cov, validate_covariance_matrix, marginal_risk_contribution
 
 
 def load_config(config_path: str) -> Dict[str, Any]:
@@ -330,7 +331,7 @@ def run_pre_trade_checks(prices_df: pd.DataFrame, sectors_ser: pd.Series,
 
 def write_report(asof: str, validation_metrics: Dict[str, Any], 
                 opt_diagnostics: Dict[str, Any], check_results: Dict[str, Any],
-                ok_to_trade: bool, output_dir: Path) -> None:
+                ok_to_trade: bool, output_dir: Path, risk_diag_line: Optional[str] = None) -> None:
     """Write text report."""
     # Create reports directory
     (output_dir / 'reports').mkdir(parents=True, exist_ok=True)
@@ -359,6 +360,10 @@ def write_report(asof: str, validation_metrics: Dict[str, Any],
         f.write(f"Risk: {opt_diagnostics['risk']:.6f}\n")
         f.write(f"Turnover: {opt_diagnostics['turnover']:.4f}\n\n")
         
+        # Risk diagnostics
+        f.write("RISK DIAGNOSTICS\n")
+        f.write(f"{risk_diag_line}\n\n")
+        
         # Pre-trade checks
         f.write("PRE-TRADE CHECKS\n")
         for check_name, result in check_results.items():
@@ -380,11 +385,25 @@ def run(asof: str, config_path: str) -> Dict[str, Any]:
     Returns:
         Summary dictionary with results
     """
-    # Setup logging
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-    
     # Load config
     config = load_config(config_path)
+    
+    # Setup logging with config
+    setup_logging(
+        level=config.get("logging", {}).get("level", "INFO"),
+        fmt=config.get("logging", {}).get("format", "%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+    )
+    
+    # Validate config
+    try:
+        validate_config(config)
+    except ValueError as e:
+        raise ValueError(f"Configuration validation failed: {e}")
+    
+    # Set random seed if specified
+    if config.get("performance", {}).get("random_seed") is not None:
+        set_random_seed(config["performance"]["random_seed"])
+    
     logging.info(f"Loaded config from {config_path}")
     
     # Load data via data_io
@@ -428,16 +447,37 @@ def run(asof: str, config_path: str) -> Dict[str, Any]:
         opt_diagnostics['success'] = False
         logging.warning("Using fallback weights due to pre-trade check failure or optimizer failure")
     
+    # Risk diagnostics (non-blocking)
+    risk_diag_line = None
+    risk_stats = None
+    try:
+        stats = validate_covariance_matrix(Sigma)
+        risk_stats = stats
+        
+        # Top risk contributors (default top 5):
+        top_n = int(config.get("output", {}).get("top_risk_contributors_n", 5))
+        mrc = marginal_risk_contribution(Sigma, weights).head(top_n)
+        
+        # Build a compact line
+        top_str = ", ".join([f"{idx} {pct:.1%}" for idx, pct in zip(mrc.index.tolist(), mrc["pct"].tolist())])
+        risk_diag_line = (
+            f"Cov cond={stats['cond']:.1f}, min_eig={stats['min_eig']:.3e}, asym={stats['max_asym']:.2e}; "
+            f"Top risk contributors: {top_str}"
+        )
+    except Exception as e:
+        logging.warning("Risk diagnostics failed: %s", e)
+        risk_diag_line = "Cov diagnostics: N/A"
+    
     # Write outputs via data_io
     outdir = Path(config.get("paths", {}).get("output_dir", "data/outputs"))
     path_hold = write_holdings(outdir, asof, weights)
     path_tr = write_trades(outdir, asof, weights, prev_weights)
-    write_report(asof, validation_metrics, opt_diagnostics, check_results, ok_to_trade, outdir)
+    write_report(asof, validation_metrics, opt_diagnostics, check_results, ok_to_trade, outdir, risk_diag_line)
     logging.info("Wrote output files")
     
     # Return summary
     report_path = outdir / 'reports' / f'{asof}_report.txt'
-    return {
+    summary = {
         'ok_to_trade': ok_to_trade,
         'asof': asof_dt.date().isoformat(),
         'paths': {
@@ -449,6 +489,12 @@ def run(asof: str, config_path: str) -> Dict[str, Any]:
         'risk': opt_diagnostics.get('risk', float('nan')),
         'turnover': opt_diagnostics.get('turnover', float('nan'))
     }
+    
+    # Add risk diagnostics if available
+    if risk_stats is not None:
+        summary["risk_diag"] = {"cond": risk_stats.get("cond"), "min_eig": risk_stats.get("min_eig")}
+    
+    return summary
 
 
 def main():

@@ -45,4 +45,17 @@ validation:
 
 # Output paths
 paths:
-  output_dir: "data/outputs" 
+  output_dir: "data/outputs"
+
+# Logging configuration (optional)
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+
+# Performance configuration (optional)
+performance:
+  random_seed: null  # Set to integer for deterministic results
+
+# Output configuration (optional)
+output:
+  top_risk_contributors_n: 5  # Number of top risk contributors to show 

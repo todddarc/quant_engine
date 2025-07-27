@@ -163,7 +163,121 @@ def shrink_cov(
     return cov_df
 
 
-def estimate_covariance(returns_df: pd.DataFrame, lookback_days: int = 60) -> pd.DataFrame:
+def validate_covariance_matrix(Sigma: pd.DataFrame) -> Dict[str, float]:
+    """
+    Quick numerical sanity checks for a covariance matrix.
+    Returns dict:
+      {
+        "n": int,                     # dimension
+        "is_square": bool,
+        "max_asym": float,            # max |Sigma - Sigma.T|
+        "min_eig": float,             # smallest eigenvalue (via eigvalsh on symmetrized Sigma)
+        "max_eig": float,             # largest eigenvalue
+        "cond": float                 # condition number = max_eig / min_eig (inf if min_eig <= 0)
+      }
+    Notes:
+    - Works on a symmetrized copy: (Sigma + Sigma.T)/2 to reduce numerical asymmetry.
+    - If Sigma has NaNs or non-square shape, return safe values and set flags accordingly.
+    """
+    try:
+        # Check shape
+        n_rows, n_cols = Sigma.shape
+        is_square = n_rows == n_cols
+        
+        if not is_square or Sigma.empty:
+            return {
+                "n": 0,
+                "is_square": False,
+                "max_asym": float('inf'),
+                "min_eig": float('inf'),
+                "max_eig": float('inf'),
+                "cond": float('inf')
+            }
+        
+        # Check for NaNs
+        if Sigma.isna().any().any():
+            return {
+                "n": n_rows,
+                "is_square": is_square,
+                "max_asym": float('inf'),
+                "min_eig": float('inf'),
+                "max_eig": float('inf'),
+                "cond": float('inf')
+            }
+        
+        # Compute asymmetry
+        max_asym = float(np.max(np.abs(Sigma.values - Sigma.values.T)))
+        
+        # Symmetrize
+        S = 0.5 * (Sigma + Sigma.T)
+        
+        # Compute eigenvalues
+        vals = np.linalg.eigvalsh(S.values)
+        min_eig = float(np.min(vals))
+        max_eig = float(np.max(vals))
+        
+        # Condition number
+        cond = float(max_eig / min_eig) if min_eig > 0 else float('inf')
+        
+        return {
+            "n": n_rows,
+            "is_square": is_square,
+            "max_asym": max_asym,
+            "min_eig": min_eig,
+            "max_eig": max_eig,
+            "cond": cond
+        }
+        
+    except Exception:
+        # Return safe values on any error
+        return {
+            "n": 0,
+            "is_square": False,
+            "max_asym": float('inf'),
+            "min_eig": float('inf'),
+            "max_eig": float('inf'),
+            "cond": float('inf')
+        }
+
+
+def marginal_risk_contribution(Sigma: pd.DataFrame, w: pd.Series) -> pd.DataFrame:
+    """
+    Marginal and component risk contributions.
+    Returns DataFrame indexed by ticker with columns:
+      - mcr: (Sigma @ w)_i
+      - contrib: w_i * mcr_i
+      - pct: contrib / total_risk    where total_risk = w.T @ Sigma @ w
+    Notes:
+    - Align Sigma and w by index/columns; drop names not in Sigma.
+    - If total_risk <= 0 (degenerate), set pct to 0.
+    - Return sorted by 'pct' descending.
+    """
+    try:
+        # Align w to Sigma index
+        w_aligned = w.loc[Sigma.index]
+        
+        # Compute marginal contributions
+        m = Sigma.values @ w_aligned.values
+        
+        # Compute total risk
+        total = float(w_aligned.values @ m)
+        
+        # Create DataFrame
+        result = pd.DataFrame({
+            'mcr': m,
+            'contrib': w_aligned.values * m,
+            'pct': np.where(total > 0, (w_aligned.values * m) / total, 0.0)
+        }, index=Sigma.index)
+        
+        # Sort by percentage descending
+        return result.sort_values("pct", ascending=False)
+        
+    except Exception:
+        # Return empty DataFrame on error
+        return pd.DataFrame(columns=['mcr', 'contrib', 'pct'])
+
+
+def estimate_covariance(returns_matrix: pd.DataFrame, method: str = "sample") -> pd.DataFrame:
     """
     Estimate covariance matrix using rolling window of returns.
     
@@ -231,23 +345,6 @@ def calculate_marginal_contribution(weights: pd.Series, cov_matrix: pd.DataFrame
         NotImplementedError: Function not yet implemented
     """
     raise NotImplementedError("calculate_marginal_contribution not implemented")
-
-
-def validate_covariance_matrix(cov_matrix: pd.DataFrame) -> bool:
-    """
-    Validate that covariance matrix is positive definite and well-conditioned.
-    
-    Args:
-        cov_matrix: Covariance matrix to validate
-        
-    Returns:
-        True if matrix is valid
-        
-    Raises:
-        ValueError: If matrix is not positive definite
-        NotImplementedError: Function not yet implemented
-    """
-    raise NotImplementedError("validate_covariance_matrix not implemented")
 
 
 def calculate_correlation_matrix(cov_matrix: pd.DataFrame) -> pd.DataFrame:
