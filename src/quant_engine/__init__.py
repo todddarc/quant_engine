@@ -7,7 +7,10 @@ with strict point-in-time discipline and comprehensive risk management.
 
 __version__ = "0.1.0"
 
-from .data_io import load_prices, load_fundamentals, load_sectors, load_prior_holdings
+from .data_io import (
+    load_prices, load_fundamentals, load_sectors, load_holdings,
+    write_holdings, write_trades, unique_dates, next_day_exists
+)
 from .signals import generate_momentum_signal, generate_value_signal, combine_signals, momentum_12m_1m_gap
 from .prep import prepare_data, calculate_returns, winsorize, zscore, sector_neutralize
 from .risk import estimate_covariance, apply_shrinkage, returns_from_prices, shrink_cov
@@ -20,7 +23,11 @@ __all__ = [
     "load_prices",
     "load_fundamentals", 
     "load_sectors",
-    "load_prior_holdings",
+    "load_holdings",
+    "write_holdings",
+    "write_trades",
+    "unique_dates",
+    "next_day_exists",
     "generate_momentum_signal",
     "generate_value_signal",
     "combine_signals",

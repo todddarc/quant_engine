@@ -1,112 +1,280 @@
 """
-Data I/O module for loading and validating CSV data files.
+Data I/O helpers for quant engine.
 
-Handles loading of prices, fundamentals, sectors, and prior holdings with
-point-in-time discipline and schema validation.
+Provides small, reusable functions for loading and writing CSV data
+with minimal validation and type coercion.
 """
 
 import pandas as pd
-from typing import Dict, Any, Optional
+import numpy as np
 from pathlib import Path
+from typing import Union, Optional
 
 
-def load_prices(file_path: Path) -> pd.DataFrame:
+def load_prices(path: Union[str, Path]) -> pd.DataFrame:
     """
-    Load price data from CSV file.
+    Load price data from CSV with validation and cleaning.
     
     Args:
-        file_path: Path to prices.csv file
+        path: Path to CSV file
         
     Returns:
-        DataFrame with columns: asof_dt, ticker, close
+        DataFrame with columns ["asof_dt", "ticker", "close"]
         
     Raises:
-        NotImplementedError: Function not yet implemented
+        ValueError: If required columns missing or data invalid
     """
-    raise NotImplementedError("load_prices not implemented")
+    # Read CSV
+    df = pd.read_csv(path)
+    
+    # Validate required columns
+    required_cols = ["asof_dt", "ticker", "close"]
+    missing_cols = set(required_cols) - set(df.columns)
+    if missing_cols:
+        raise ValueError(f"Missing required columns: {missing_cols}")
+    
+    # Coerce types
+    df["asof_dt"] = pd.to_datetime(df["asof_dt"]).dt.date
+    df["asof_dt"] = pd.to_datetime(df["asof_dt"])
+    df["ticker"] = df["ticker"].astype(str)
+    df["close"] = pd.to_numeric(df["close"], errors="coerce")
+    
+    # Drop duplicates and invalid data
+    df = df.drop_duplicates(subset=["asof_dt", "ticker"], keep="last")
+    df = df.dropna(subset=["close"])
+    df = df[np.isfinite(df["close"])]
+    
+    # Sort and return
+    df = df.sort_values(["asof_dt", "ticker"]).reset_index(drop=True)
+    return df
 
 
-def load_fundamentals(file_path: Path) -> pd.DataFrame:
+def load_fundamentals(path: Union[str, Path]) -> pd.DataFrame:
     """
-    Load fundamental data from CSV file with point-in-time lag enforcement.
+    Load fundamental data from CSV with validation and cleaning.
     
     Args:
-        file_path: Path to fundamentals.csv file
+        path: Path to CSV file
         
     Returns:
-        DataFrame with columns: report_dt, ticker, eps_ttm, book_value_ps, report_lag_days
+        DataFrame with fundamental data
         
     Raises:
-        NotImplementedError: Function not yet implemented
+        ValueError: If required columns missing or data invalid
     """
-    raise NotImplementedError("load_fundamentals not implemented")
+    # Read CSV
+    df = pd.read_csv(path)
+    
+    # Validate required columns
+    required_cols = ["report_dt", "available_asof", "ticker", "eps_ttm", "book_value_ps"]
+    missing_cols = set(required_cols) - set(df.columns)
+    if missing_cols:
+        raise ValueError(f"Missing required columns: {missing_cols}")
+    
+    # Coerce types
+    df["report_dt"] = pd.to_datetime(df["report_dt"]).dt.date
+    df["report_dt"] = pd.to_datetime(df["report_dt"])
+    df["available_asof"] = pd.to_datetime(df["available_asof"]).dt.date
+    df["available_asof"] = pd.to_datetime(df["available_asof"])
+    df["ticker"] = df["ticker"].astype(str)
+    df["eps_ttm"] = pd.to_numeric(df["eps_ttm"], errors="coerce")
+    df["book_value_ps"] = pd.to_numeric(df["book_value_ps"], errors="coerce")
+    
+    # Keep valid rows
+    df = df[df["available_asof"] >= df["report_dt"]]
+    df = df.dropna(subset=["eps_ttm", "book_value_ps"])
+    df = df[np.isfinite(df["eps_ttm"]) & np.isfinite(df["book_value_ps"])]
+    
+    # Sort and return
+    df = df.sort_values(["ticker", "available_asof"]).reset_index(drop=True)
+    return df
 
 
-def load_sectors(file_path: Path) -> pd.DataFrame:
+def load_sectors(path: Union[str, Path]) -> pd.Series:
     """
-    Load sector mapping from CSV file.
+    Load sector data from CSV and return as Series.
     
     Args:
-        file_path: Path to sectors.csv file
+        path: Path to CSV file
         
     Returns:
-        DataFrame with columns: ticker, sector
+        Series with ticker index and sector values
         
     Raises:
-        NotImplementedError: Function not implemented
+        ValueError: If required columns missing
     """
-    raise NotImplementedError("load_sectors not implemented")
+    # Read CSV
+    df = pd.read_csv(path)
+    
+    # Validate required columns
+    required_cols = ["ticker", "sector"]
+    missing_cols = set(required_cols) - set(df.columns)
+    if missing_cols:
+        raise ValueError(f"Missing required columns: {missing_cols}")
+    
+    # Coerce types and clean
+    df["ticker"] = df["ticker"].astype(str)
+    df["sector"] = df["sector"].astype(str)
+    df = df.dropna(subset=["sector"])
+    df = df.drop_duplicates(subset=["ticker"], keep="last")
+    
+    # Return as Series
+    return df.set_index("ticker")["sector"]
 
 
-def load_prior_holdings(file_path: Path) -> pd.DataFrame:
+def load_holdings(path: Union[str, Path], asof: Union[str, pd.Timestamp]) -> pd.Series:
     """
-    Load prior day holdings from CSV file.
+    Load holdings data for a specific date.
     
     Args:
-        file_path: Path to holdings_prior.csv file
+        path: Path to CSV file
+        asof: Date to filter for
         
     Returns:
-        DataFrame with columns: ticker, weight
+        Series with ticker index and normalized weights
         
     Raises:
-        NotImplementedError: Function not implemented
+        ValueError: If required columns missing or no data for asof
     """
-    raise NotImplementedError("load_prior_holdings not implemented")
+    # Read CSV
+    df = pd.read_csv(path)
+    
+    # Validate required columns
+    required_cols = ["asof_dt", "ticker", "weight"]
+    missing_cols = set(required_cols) - set(df.columns)
+    if missing_cols:
+        raise ValueError(f"Missing required columns: {missing_cols}")
+    
+    # Coerce types
+    df["asof_dt"] = pd.to_datetime(df["asof_dt"]).dt.date
+    df["asof_dt"] = pd.to_datetime(df["asof_dt"])
+    df["ticker"] = df["ticker"].astype(str)
+    df["weight"] = pd.to_numeric(df["weight"], errors="coerce")
+    
+    # Filter to asof date
+    asof_dt = pd.to_datetime(asof).date()
+    asof_dt = pd.to_datetime(asof_dt)
+    df = df[df["asof_dt"] == asof_dt]
+    
+    if df.empty:
+        raise ValueError(f"No holdings data found for date: {asof}")
+    
+    # Group by ticker and sum weights
+    holdings = df.groupby("ticker")["weight"].sum()
+    
+    # Clean weights
+    holdings = holdings.clip(lower=0)  # Clip negatives to 0
+    holdings = holdings.dropna()  # Drop NaNs
+    
+    # Renormalize to sum=1
+    if holdings.sum() > 0:
+        holdings = holdings / holdings.sum()
+    
+    return holdings
 
 
-def validate_schema(df: pd.DataFrame, expected_columns: Dict[str, type], name: str) -> bool:
+def write_holdings(outdir: Union[str, Path], asof: Union[str, pd.Timestamp], 
+                  weights: pd.Series) -> Path:
     """
-    Validate DataFrame schema against expected columns and types.
+    Write holdings data to CSV.
     
     Args:
-        df: DataFrame to validate
-        expected_columns: Dict mapping column names to expected types
-        name: Name of the data source for error messages
+        outdir: Output directory
+        asof: Date for holdings
+        weights: Series with ticker index and weights
         
     Returns:
-        True if schema is valid
-        
-    Raises:
-        ValueError: If schema validation fails
-        NotImplementedError: Function not implemented
+        Path to written file
     """
-    raise NotImplementedError("validate_schema not implemented")
+    outdir = Path(outdir)
+    outdir.mkdir(parents=True, exist_ok=True)
+    
+    # Prepare data
+    asof_dt = pd.to_datetime(asof).strftime("%Y-%m-%d")
+    df = pd.DataFrame({
+        "asof_dt": asof_dt,
+        "ticker": weights.index,
+        "weight": weights.values
+    })
+    
+    # Sort by ticker and write
+    df = df.sort_values("ticker")
+    outpath = outdir / f"holdings_{asof_dt}.csv"
+    df.to_csv(outpath, index=False)
+    
+    return outpath
 
 
-def enforce_point_in_time(prices_df: pd.DataFrame, fundamentals_df: pd.DataFrame, 
-                         asof_date: pd.Timestamp) -> pd.DataFrame:
+def write_trades(outdir: Union[str, Path], asof: Union[str, pd.Timestamp],
+                new_w: pd.Series, prev_w: pd.Series) -> Path:
     """
-    Enforce point-in-time discipline by applying reporting lags.
+    Write trade data to CSV.
     
     Args:
-        prices_df: Price data
-        fundamentals_df: Fundamental data with report_lag_days
-        asof_date: Current date for point-in-time calculation
+        outdir: Output directory
+        asof: Date for trades
+        new_w: New weights Series
+        prev_w: Previous weights Series
         
     Returns:
-        DataFrame with fundamentals adjusted for reporting lags
-        
-    Raises:
-        NotImplementedError: Function not implemented
+        Path to written file
     """
-    raise NotImplementedError("enforce_point_in_time not implemented") 
+    outdir = Path(outdir)
+    outdir.mkdir(parents=True, exist_ok=True)
+    
+    # Align tickers
+    all_tickers = new_w.index.union(prev_w.index)
+    new_aligned = new_w.reindex(all_tickers, fill_value=0.0)
+    prev_aligned = prev_w.reindex(all_tickers, fill_value=0.0)
+    
+    # Calculate deltas
+    delta = new_aligned - prev_aligned
+    
+    # Prepare data
+    asof_dt = pd.to_datetime(asof).strftime("%Y-%m-%d")
+    df = pd.DataFrame({
+        "asof_dt": asof_dt,
+        "ticker": delta.index,
+        "delta_weight": delta.values
+    })
+    
+    # Sort by absolute delta descending, then by ticker
+    df["abs_delta"] = df["delta_weight"].abs()
+    df = df.sort_values(["abs_delta", "ticker"], ascending=[False, True])
+    df = df.drop("abs_delta", axis=1)
+    
+    # Write file
+    outpath = outdir / f"trades_{asof_dt}.csv"
+    df.to_csv(outpath, index=False)
+    
+    return outpath
+
+
+def unique_dates(prices_df: pd.DataFrame) -> pd.DatetimeIndex:
+    """
+    Get unique dates from prices DataFrame.
+    
+    Args:
+        prices_df: DataFrame with asof_dt column
+        
+    Returns:
+        Sorted DatetimeIndex of unique dates
+    """
+    return pd.DatetimeIndex(sorted(prices_df["asof_dt"].unique()))
+
+
+def next_day_exists(prices_df: pd.DataFrame, asof: Union[str, pd.Timestamp]) -> bool:
+    """
+    Check if there is a trading day after the given date.
+    
+    Args:
+        prices_df: DataFrame with asof_dt column
+        asof: Date to check
+        
+    Returns:
+        True if there is a trading day strictly after asof
+    """
+    asof_dt = pd.to_datetime(asof)
+    unique_dates = pd.DatetimeIndex(sorted(prices_df["asof_dt"].unique()))
+    
+    return (unique_dates > asof_dt).any() 

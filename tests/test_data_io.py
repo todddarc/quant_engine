@@ -6,8 +6,8 @@ import pytest
 import pandas as pd
 from pathlib import Path
 from src.quant_engine.data_io import (
-    load_prices, load_fundamentals, load_sectors, load_prior_holdings,
-    validate_schema, enforce_point_in_time
+    load_prices, load_fundamentals, load_sectors, load_holdings,
+    write_holdings, write_trades, unique_dates, next_day_exists
 )
 
 
@@ -47,33 +47,37 @@ class TestLoadSectors:
         pytest.skip("not implemented")
 
 
-class TestLoadPriorHoldings:
-    """Test prior holdings loading functionality."""
+class TestLoadHoldings:
+    """Test holdings loading functionality."""
     
-    def test_load_prior_holdings_basic(self):
-        """Test basic prior holdings loading."""
+    def test_load_holdings_basic(self):
+        """Test basic holdings loading."""
         pytest.skip("not implemented")
 
 
-class TestValidateSchema:
-    """Test schema validation functionality."""
+class TestWriteHoldings:
+    """Test holdings writing functionality."""
     
-    def test_validate_schema_valid(self):
-        """Test validation of valid schema."""
-        pytest.skip("not implemented")
-    
-    def test_validate_schema_invalid(self):
-        """Test validation of invalid schema."""
+    def test_write_holdings_basic(self):
+        """Test basic holdings writing."""
         pytest.skip("not implemented")
 
 
-class TestEnforcePointInTime:
-    """Test point-in-time discipline enforcement."""
+class TestWriteTrades:
+    """Test trades writing functionality."""
     
-    def test_enforce_point_in_time_basic(self):
-        """Test basic point-in-time enforcement."""
+    def test_write_trades_basic(self):
+        """Test basic trades writing."""
+        pytest.skip("not implemented")
+
+
+class TestUtilityFunctions:
+    """Test utility functions."""
+    
+    def test_unique_dates_basic(self):
+        """Test unique dates extraction."""
         pytest.skip("not implemented")
     
-    def test_enforce_point_in_time_with_lags(self):
-        """Test point-in-time enforcement with reporting lags."""
+    def test_next_day_exists_basic(self):
+        """Test next day existence check."""
         pytest.skip("not implemented") 
