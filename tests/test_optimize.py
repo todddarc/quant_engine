@@ -5,7 +5,7 @@ Tests for optimize module.
 import pytest
 import pandas as pd
 import numpy as np
-from src.engine.optimize import (
+from src.quant_engine.optimize import (
     optimize_portfolio, apply_constraints, calculate_turnover,
     check_sector_caps, create_optimization_constraints,
     objective_function, fallback_to_prior_weights, mean_variance_opt

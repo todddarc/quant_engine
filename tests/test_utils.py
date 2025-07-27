@@ -6,7 +6,7 @@ import pytest
 import pandas as pd
 import numpy as np
 from datetime import date, timedelta
-from src.engine.utils import (
+from src.quant_engine.utils import (
     compute_next_period_returns, cross_sectional_ic, compute_ic_series,
     summarize_ic, decile_portfolio_returns
 )

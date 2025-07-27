@@ -5,7 +5,7 @@ Tests for prep module.
 import pytest
 import pandas as pd
 import numpy as np
-from src.engine.prep import (
+from src.quant_engine.prep import (
     prepare_data, calculate_returns, align_data_to_date,
     handle_missing_data, create_universe_mask, calculate_forward_returns,
     winsorize, zscore, sector_neutralize

@@ -5,7 +5,7 @@ Tests for checks module.
 import pytest
 import pandas as pd
 import numpy as np
-from src.engine.checks import (
+from src.quant_engine.checks import (
     validate_data, check_turnover, check_sector_exposure,
     check_data_missingness, check_schema_drift, check_extreme_values,
     run_all_checks, check_schema, check_missingness, aggregate_checks

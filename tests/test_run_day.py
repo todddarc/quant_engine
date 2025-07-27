@@ -7,7 +7,7 @@ import pandas as pd
 import numpy as np
 import yaml
 from pathlib import Path
-from src.engine.run_day import run
+from src.quant_engine.run_day import run
 
 
 def create_test_data(tmp_path: Path) -> None:

@@ -5,7 +5,7 @@ Tests for signals module.
 import pytest
 import pandas as pd
 import numpy as np
-from src.engine.signals import (
+from src.quant_engine.signals import (
     generate_momentum_signal, generate_value_signal, winsorize_signals,
     z_score_signals, sector_neutralize, combine_signals, calculate_signal_ic,
     momentum_12m_1m_gap, value_ep
