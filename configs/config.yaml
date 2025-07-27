@@ -1,0 +1,48 @@
+# Quant Engine Configuration
+# Configuration file for the quantitative equity portfolio construction engine
+
+# Data file paths
+data:
+  prices_path: "data/prices.csv"
+  fundamentals_path: "data/fundamentals.csv"
+  sectors_path: "data/sectors.csv"
+  holdings_path: "data/holdings_prev.csv"
+
+# Signal Generation Parameters
+signals:
+  momentum:
+    lookback: 252          # Days to look back for momentum calculation
+    gap: 21               # Days to skip (avoid short-term reversal)
+  
+  value:
+    min_lag_days: 60      # Minimum lag days for fundamental data
+  
+  # Signal combination weights (should sum to 1.0)
+  weights:
+    momentum: 0.5
+    value: 0.5
+
+# Risk Model Parameters
+risk:
+  cov_lookback_days: 60   # Days to use for covariance estimation
+  shrink_lambda: 0.3      # Shrinkage parameter (0-1)
+  diag_load: 0.0001       # Small value to add to diagonal for conditioning
+
+# Portfolio Optimization Constraints
+optimization:
+  w_max: 0.05             # Maximum weight per individual security (5%)
+  sector_cap: 0.25        # Maximum weight per sector (25%)
+  turnover_cap: 0.10      # Maximum daily turnover (10%)
+  risk_aversion: 8.0      # Risk aversion parameter
+
+# Pre-trade Checks
+checks:
+  missing_max: 0.005      # Maximum allowed missing data fraction (0.5%)
+
+# Validation Parameters
+validation:
+  ic_window_days: 60      # Days to use for IC and decile analysis
+
+# Output paths
+paths:
+  output_dir: "data/outputs" 
