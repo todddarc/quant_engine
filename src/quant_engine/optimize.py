@@ -25,6 +25,7 @@ def mean_variance_opt(
     risk_aversion: float = 8.0,
     eps_turnover: float = 1e-8,
     max_iter: int = 500,
+    fixed_weights: Optional[pd.Series] = None,
 ) -> Tuple[pd.Series, Dict[str, object]]:
     """
     Mean–variance portfolio optimization:
@@ -44,6 +45,9 @@ def mean_variance_opt(
         risk_aversion: Risk aversion parameter
         eps_turnover: Smoothing parameter for turnover constraint
         max_iter: Maximum iterations for optimizer
+        fixed_weights: Optional Series indexed by tickers to be held fixed at the given values 
+                      (typically prev_w for frozen names). When provided, for any i in 
+                      fixed_weights.index, set bounds[i] = (fixed_weights[i], fixed_weights[i]).
         
     Returns:
         Tuple of (weights Series indexed by ticker, diagnostics dict)
@@ -52,6 +56,7 @@ def mean_variance_opt(
         - Sigma must be a pd.DataFrame with index/columns matching the ticker order of alpha
         - Uses smooth absolute value: abs(x) ≈ sqrt(x^2 + eps_turnover)
         - If optimizer fails or problem appears infeasible, returns prev_w and diagnostics["success"]=False
+        - Fixed weights contribute zero turnover automatically since w_i == prev_w_i
     """
     # Align tickers across alpha and Sigma
     common_tickers = alpha.index.intersection(Sigma.index)
@@ -93,6 +98,15 @@ def mean_variance_opt(
     prev_w_aligned = None
     if prev_w is not None:
         prev_w_aligned = prev_w.reindex(tickers_with_sectors).fillna(1.0/len(tickers_with_sectors))
+    
+    # Align fixed_weights if provided
+    fixed_weights_aligned = None
+    if fixed_weights is not None:
+        fixed_weights_aligned = fixed_weights.reindex(tickers_with_sectors).dropna()
+        if len(fixed_weights_aligned) == 0:
+            fixed_weights_aligned = None
+        else:
+            logging.info(f"mean_variance_opt: {len(fixed_weights_aligned)} tickers fixed at their weights")
     
     n_assets = len(tickers_with_sectors)
     
@@ -165,6 +179,12 @@ def mean_variance_opt(
     else:
         bounds = [(-w_max, w_max)] * n_assets
     
+    # Apply fixed weights constraints
+    if fixed_weights_aligned is not None:
+        for ticker, fixed_weight in fixed_weights_aligned.items():
+            idx = tickers_with_sectors.get_loc(ticker)
+            bounds[idx] = (fixed_weight, fixed_weight)
+    
     # Initial guess
     if prev_w_aligned is not None:
         x0 = prev_w_aligned.values.copy()
@@ -173,6 +193,12 @@ def mean_variance_opt(
         x0 = x0 / np.sum(x0)
     else:
         x0 = np.ones(n_assets) / n_assets
+    
+    # Overwrite fixed weights in initial guess
+    if fixed_weights_aligned is not None:
+        for ticker, fixed_weight in fixed_weights_aligned.items():
+            idx = tickers_with_sectors.get_loc(ticker)
+            x0[idx] = fixed_weight
     
     # Optimize
     try:
