@@ -22,7 +22,7 @@ from .signals import momentum_12m_1m_gap, value_ep
 from .prep import winsorize, zscore, sector_neutralize
 from .risk import returns_from_prices, shrink_cov
 from .optimize import mean_variance_opt
-from .checks import check_schema, check_missingness, check_turnover, check_sector_exposure, aggregate_checks
+from .checks import check_schema, check_missingness, check_turnover, check_sector_exposure, aggregate_checks, check_schema_drift, check_extreme_values
 from .utils import compute_next_period_returns, cross_sectional_ic, compute_ic_series, summarize_ic, decile_portfolio_returns, setup_logging, validate_config, set_random_seed
 from .risk import returns_from_prices, shrink_cov, validate_covariance_matrix, marginal_risk_contribution
 
@@ -331,7 +331,9 @@ def run_pre_trade_checks(prices_df: pd.DataFrame, sectors_ser: pd.Series,
 
 def write_report(asof: str, validation_metrics: Dict[str, Any], 
                 opt_diagnostics: Dict[str, Any], check_results: Dict[str, Any],
-                ok_to_trade: bool, output_dir: Path, risk_diag_line: Optional[str] = None) -> None:
+                ok_to_trade: bool, output_dir: Path, risk_diag_line: Optional[str] = None,
+                drift_prices: Optional[Dict[str, Any]] = None, drift_fund: Optional[Dict[str, Any]] = None,
+                drift_sects: Optional[Dict[str, Any]] = None, extreme: Optional[Dict[str, Any]] = None) -> None:
     """Write text report."""
     # Create reports directory
     (output_dir / 'reports').mkdir(parents=True, exist_ok=True)
@@ -363,6 +365,24 @@ def write_report(asof: str, validation_metrics: Dict[str, Any],
         # Risk diagnostics
         f.write("RISK DIAGNOSTICS\n")
         f.write(f"{risk_diag_line}\n\n")
+        
+        # Data diagnostics (WARN-only)
+        f.write("DATA DIAGNOSTICS (WARN-only)\n")
+        if drift_prices is not None:
+            def _fmt_drift(d):
+                if d["ok"]:
+                    return f"{d['name']}: OK"
+                add = ", ".join(d["added"]) if d["added"] else "-"
+                rem = ", ".join(d["removed"]) if d["removed"] else "-"
+                return f"{d['name']}: ADDED[{add}] REMOVED[{rem}]"
+            f.write(f"{_fmt_drift(drift_prices)}\n")
+            f.write(f"{_fmt_drift(drift_fund)}\n")
+            f.write(f"{_fmt_drift(drift_sects)}\n")
+        if extreme is not None and extreme.get("n", 0) > 0:
+            f.write(f"Signal extremes: {extreme['n_extreme']} / {extreme['n']} beyond {extreme['threshold']:.1f} std dev\n")
+        else:
+            f.write("Signal extremes: N/A\n")
+        f.write("\n")
         
         # Pre-trade checks
         f.write("PRE-TRADE CHECKS\n")
@@ -411,9 +431,27 @@ def run(asof: str, config_path: str) -> Dict[str, Any]:
     logging.info(f"Loaded data: {len(prices_df)} price records, {len(fundamentals_df)} fundamental records")
     logging.info(f"Validated asof date: {asof}")
     
+    # Data diagnostics (WARN-only)
+    expected_prices = ["asof_dt","ticker","close"]
+    expected_fund   = ["report_dt","available_asof","ticker","eps_ttm","book_value_ps"]
+    expected_sects  = ["ticker","sector"]
+    expected_hold   = ["asof_dt","ticker","weight"]
+    
+    drift_prices = check_schema_drift(prices_df, expected_prices, "prices")
+    drift_fund   = check_schema_drift(fundamentals_df, expected_fund, "fundamentals")
+    # sectors_ser is a Series; rebuild a small DataFrame for schema check
+    sectors_df = sectors_ser.rename("sector").reset_index()[["ticker","sector"]]
+    drift_sects = check_schema_drift(sectors_df, expected_sects, "sectors")
+    
     # Build signals
     alpha = build_signals(prices_df, fundamentals_df, sectors_ser, asof_dt, config)
     logging.info(f"Built signals for {len(alpha)} tickers")
+    
+    # Signal extreme values check (WARN-only)
+    try:
+        extreme = check_extreme_values(alpha)
+    except Exception:
+        extreme = {"n": 0, "n_extreme": 0, "indices": [], "threshold": float("nan")}
     
     # Compute validation metrics
     validation_metrics = compute_validation_metrics(prices_df, alpha, asof_dt, config, fundamentals_df, sectors_ser)
@@ -472,7 +510,8 @@ def run(asof: str, config_path: str) -> Dict[str, Any]:
     outdir = Path(config.get("paths", {}).get("output_dir", "data/outputs"))
     path_hold = write_holdings(outdir, asof, weights)
     path_tr = write_trades(outdir, asof, weights, prev_weights)
-    write_report(asof, validation_metrics, opt_diagnostics, check_results, ok_to_trade, outdir, risk_diag_line)
+    write_report(asof, validation_metrics, opt_diagnostics, check_results, ok_to_trade, outdir, risk_diag_line,
+                 drift_prices, drift_fund, drift_sects, extreme)
     logging.info("Wrote output files")
     
     # Return summary

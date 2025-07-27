@@ -11,10 +11,10 @@ from .data_io import (
     load_prices, load_fundamentals, load_sectors, load_holdings,
     write_holdings, write_trades, unique_dates, next_day_exists
 )
-from .signals import generate_momentum_signal, generate_value_signal, combine_signals, momentum_12m_1m_gap
-from .prep import prepare_data, calculate_returns, winsorize, zscore, sector_neutralize
-from .risk import estimate_covariance, apply_shrinkage, returns_from_prices, shrink_cov
-from .optimize import optimize_portfolio, apply_constraints, mean_variance_opt
+from .signals import momentum_12m_1m_gap, value_ep
+from .prep import winsorize, zscore, sector_neutralize
+from .risk import returns_from_prices, shrink_cov, validate_covariance_matrix, marginal_risk_contribution
+from .optimize import mean_variance_opt
 from .checks import validate_data, check_turnover, check_sector_exposure, check_schema, check_missingness, aggregate_checks
 from .run_day import run, main
 from .utils import compute_next_period_returns, cross_sectional_ic, compute_ic_series, summarize_ic, decile_portfolio_returns
@@ -28,21 +28,15 @@ __all__ = [
     "write_trades",
     "unique_dates",
     "next_day_exists",
-    "generate_momentum_signal",
-    "generate_value_signal",
-    "combine_signals",
     "momentum_12m_1m_gap",
-    "prepare_data",
-    "calculate_returns",
+    "value_ep",
     "winsorize",
     "zscore", 
     "sector_neutralize",
-    "estimate_covariance",
-    "apply_shrinkage",
     "returns_from_prices",
     "shrink_cov",
-    "optimize_portfolio",
-    "apply_constraints",
+    "validate_covariance_matrix",
+    "marginal_risk_contribution",
     "mean_variance_opt",
     "validate_data",
     "check_turnover",

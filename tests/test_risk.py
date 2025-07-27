@@ -6,9 +6,8 @@ import pytest
 import pandas as pd
 import numpy as np
 from src.quant_engine.risk import (
-    estimate_covariance, apply_shrinkage, calculate_portfolio_risk,
-    calculate_marginal_contribution, validate_covariance_matrix,
-    calculate_correlation_matrix, returns_from_prices, shrink_cov
+    validate_covariance_matrix, returns_from_prices, shrink_cov,
+    marginal_risk_contribution
 )
 
 

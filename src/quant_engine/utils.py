@@ -73,77 +73,7 @@ def setup_logging(level: str = "INFO", fmt: Optional[str] = None) -> None:
     logging.basicConfig(level=log_level, format=fmt)
 
 
-def load_config(config_path: Path) -> Config:
-    """
-    Load configuration from YAML file.
-    
-    Args:
-        config_path: Path to config.yaml file
-        
-    Returns:
-        Config dataclass instance
-        
-    Raises:
-        NotImplementedError: Function not yet implemented
-    """
-    raise NotImplementedError("load_config not implemented")
 
-
-def save_results(weights: pd.Series, trades: pd.DataFrame, report: str,
-                output_dir: Path) -> None:
-    """
-    Save portfolio results to files.
-    
-    Args:
-        weights: Final portfolio weights
-        trades: Trade recommendations
-        report: Text report
-        output_dir: Output directory
-        
-    Raises:
-        NotImplementedError: Function not yet implemented
-    """
-    raise NotImplementedError("save_results not implemented")
-
-
-def calculate_portfolio_metrics(weights: pd.Series, returns: pd.Series,
-                              cov_matrix: pd.DataFrame) -> Dict[str, float]:
-    """
-    Calculate portfolio performance metrics.
-    
-    Args:
-        weights: Portfolio weights
-        returns: Asset returns
-        cov_matrix: Covariance matrix
-        
-    Returns:
-        Dict with portfolio metrics
-        
-    Raises:
-        NotImplementedError: Function not yet implemented
-    """
-    raise NotImplementedError("calculate_portfolio_metrics not implemented")
-
-
-def generate_report(signal_ic: pd.Series, decile_returns: pd.DataFrame,
-                   portfolio_metrics: Dict[str, float],
-                   check_results: Dict[str, Any]) -> str:
-    """
-    Generate text report with performance and validation results.
-    
-    Args:
-        signal_ic: Signal IC series
-        decile_returns: Decile performance data
-        portfolio_metrics: Portfolio performance metrics
-        check_results: Validation check results
-        
-    Returns:
-        Formatted report string
-        
-    Raises:
-        NotImplementedError: Function not yet implemented
-    """
-    raise NotImplementedError("generate_report not implemented")
 
 
 def validate_config(cfg: Dict[str, Any]) -> None:
