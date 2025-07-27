@@ -190,8 +190,8 @@ def test_factor_model_realism(tmp_path):
     mean_returns = returns.mean()
     std_returns = returns.std()
     
-    # Mean returns should be small (around 0.0002)
-    assert abs(mean_returns.mean()) < 0.001, f"Mean returns too large: {mean_returns.mean()}"
+    # Mean returns should be small (around 0.0002, but allow for skill injection)
+    assert abs(mean_returns.mean()) < 0.002, f"Mean returns too large: {mean_returns.mean()}"
     
     # Std returns should be reasonable (around 0.01-0.02)
     assert 0.005 < std_returns.mean() < 0.05, f"Std returns outside reasonable range: {std_returns.mean()}"
