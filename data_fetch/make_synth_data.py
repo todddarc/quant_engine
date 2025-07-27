@@ -180,7 +180,7 @@ def get_tickers_alive_on(prices_wide: pd.DataFrame, date: pd.Timestamp, delistin
 
 def generate_prices(calendar: pd.DatetimeIndex, tickers: List[str], 
                    sectors: Dict[str, str], delistings: Dict[str, int],
-                   fundamentals_df: pd.DataFrame) -> pd.DataFrame:
+                   fundamentals_df: pd.DataFrame, log_alpha_gt: bool = True) -> Tuple[pd.DataFrame, List[Dict[str, Any]]]:
     """Generate price data using factor model with skill injection and delistings."""
     np.random.seed(SEED)  # Ensure determinism
     
@@ -195,6 +195,9 @@ def generate_prices(calendar: pd.DatetimeIndex, tickers: List[str],
     # Set initial prices
     for ticker in tickers:
         prices_wide.loc[calendar[0], ticker] = prices_dict[ticker]
+    
+    # Initialize alpha logging list
+    alpha_log_rows = []
     
     # Generate factor model returns with skill injection
     for t in range(1, len(calendar)):
@@ -225,6 +228,19 @@ def generate_prices(calendar: pd.DatetimeIndex, tickers: List[str],
         # Predictive alpha term based on t-1 signals
         alpha_term = BETA_MOM * mom_z.values + BETA_VAL * val_z.values
         
+        # Log alpha ground truth if requested
+        if log_alpha_gt:
+            for i, ticker in enumerate(active):
+                alpha_log_rows.append({
+                    "asof_dt": date_t.date().isoformat(),
+                    "ticker": ticker,
+                    "alpha_gt_used": float(alpha_term[i]),
+                    "mom_z_tm1": float(mom_z.loc[ticker]) if ticker in mom_z.index else np.nan,
+                    "val_z_tm1": float(val_z.loc[ticker]) if ticker in val_z.index else np.nan,
+                    "beta_mom": float(BETA_MOM),
+                    "beta_val": float(BETA_VAL),
+                })
+        
         # Final return for active tickers
         r_t = market_t + np.array([sector_shocks[sectors[ticker]] for ticker in active]) + alpha_term + idio
         
@@ -246,7 +262,7 @@ def generate_prices(calendar: pd.DatetimeIndex, tickers: List[str],
     prices_df = pd.DataFrame(prices_data)
     prices_df = prices_df.drop_duplicates(subset=['asof_dt', 'ticker'], keep='last')
     
-    return prices_df
+    return prices_df, alpha_log_rows
 
 
 def generate_fundamentals(calendar: pd.DatetimeIndex, tickers: List[str]) -> pd.DataFrame:
@@ -357,7 +373,7 @@ def generate_holdings_prev(prices_df: pd.DataFrame) -> pd.DataFrame:
     return holdings_df
 
 
-def generate(outdir: str = "data") -> Dict[str, Any]:
+def generate(outdir: str = "data", log_alpha_gt: bool = True, alpha_gt_path: str = "data/alpha_gt.csv") -> Dict[str, Any]:
     """Generate all synthetic data files."""
     # Set seed for determinism
     np.random.seed(SEED)
@@ -377,7 +393,7 @@ def generate(outdir: str = "data") -> Dict[str, Any]:
     
     # Generate all datasets
     fundamentals_df = generate_fundamentals(calendar, tickers)
-    prices_df = generate_prices(calendar, tickers, sectors, delistings, fundamentals_df)
+    prices_df, alpha_log_rows = generate_prices(calendar, tickers, sectors, delistings, fundamentals_df, log_alpha_gt)
     sectors_df = generate_sectors(tickers, sectors)
     holdings_df = generate_holdings_prev(prices_df)
     
@@ -386,6 +402,29 @@ def generate(outdir: str = "data") -> Dict[str, Any]:
     fundamentals_df.to_csv(out_path / 'fundamentals.csv', index=False)
     sectors_df.to_csv(out_path / 'sectors.csv', index=False)
     holdings_df.to_csv(out_path / 'holdings_prev.csv', index=False)
+    
+    # Write alpha ground truth if requested
+    if log_alpha_gt and alpha_log_rows:
+        alpha_df = pd.DataFrame(alpha_log_rows)
+        # Ensure proper dtypes
+        alpha_df['asof_dt'] = alpha_df['asof_dt'].astype(str)
+        alpha_df['ticker'] = alpha_df['ticker'].astype(str)
+        alpha_df['alpha_gt_used'] = alpha_df['alpha_gt_used'].astype(float)
+        alpha_df['mom_z_tm1'] = alpha_df['mom_z_tm1'].astype(float)
+        alpha_df['val_z_tm1'] = alpha_df['val_z_tm1'].astype(float)
+        alpha_df['beta_mom'] = alpha_df['beta_mom'].astype(float)
+        alpha_df['beta_val'] = alpha_df['beta_val'].astype(float)
+        
+        # Sort by asof_dt, ticker
+        alpha_df = alpha_df.sort_values(['asof_dt', 'ticker'])
+        
+        # Create parent directories if needed
+        alpha_gt_path = Path(alpha_gt_path)
+        alpha_gt_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        # Write to CSV
+        alpha_df.to_csv(alpha_gt_path, index=False)
+        print(f"Alpha ground truth written to: {alpha_gt_path}")
     
     # Generate summary
     last_date = prices_df['asof_dt'].max()
@@ -423,13 +462,16 @@ def main():
     parser.add_argument("--outdir", default="data", help="Output directory (default: data)")
     parser.add_argument("--beta-mom", type=float, default=BETA_MOM, help=f"Momentum beta (default: {BETA_MOM})")
     parser.add_argument("--beta-val", type=float, default=BETA_VAL, help=f"Value beta (default: {BETA_VAL})")
+    parser.add_argument("--log-alpha-gt", action="store_true", default=True, help="Log alpha ground truth (default: True)")
+    parser.add_argument("--no-log-alpha-gt", dest="log_alpha_gt", action="store_false", help="Disable alpha ground truth logging")
+    parser.add_argument("--alpha-gt-path", default="data/alpha_gt.csv", help="Path for alpha ground truth CSV (default: data/alpha_gt.csv)")
     args = parser.parse_args()
     
     # Update global parameters
     BETA_MOM = args.beta_mom
     BETA_VAL = args.beta_val
     
-    generate(args.outdir)
+    generate(args.outdir, args.log_alpha_gt, args.alpha_gt_path)
 
 
 if __name__ == "__main__":
