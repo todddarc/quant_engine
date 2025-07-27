@@ -16,7 +16,7 @@ The Quant Engine provides a complete pipeline for quantitative equity portfolio 
 
 ```
 quant_engine/
-├── src/engine/           # Core engine modules
+├── src/quant_engine/     # Core engine modules (new package name)
 │   ├── data_io.py        # Data loading and validation
 │   ├── signals.py        # Signal generation
 │   ├── prep.py           # Data preparation
@@ -25,6 +25,7 @@ quant_engine/
 │   ├── checks.py         # Pre-trade validation
 │   ├── utils.py          # Utilities
 │   └── run_day.py        # Main execution pipeline
+├── src/engine/           # Backward compatibility shim
 ├── tests/                # Unit tests
 ├── data/                 # Input data files
 ├── reports/              # Output files
@@ -46,8 +47,10 @@ pip install numpy pandas scipy pyyaml pytest
 # Run tests
 python -m pytest tests/
 
-# Execute portfolio construction
-python src/engine/run_day.py --asof 2024-01-15
+# Execute portfolio construction (multiple options)
+python -m src.quant_engine.run_day --asof 2024-01-15
+python -m src.engine.run_day --asof 2024-01-15  # legacy path
+qe-run --asof 2024-01-15  # console script (after installation)
 ```
 
 ### Configuration
