@@ -173,8 +173,8 @@ def test_deterministic_output(tmp_path):
             f"Files {filename} are not identical"
 
 
-def test_factor_model_realism(tmp_path):
-    """Test that factor model produces realistic price movements."""
+def test_return_statistics_realism(tmp_path):
+    """Test that return statistics are realistic (including skill injection)."""
     # Generate data
     generate(str(tmp_path))
     
@@ -190,14 +190,40 @@ def test_factor_model_realism(tmp_path):
     mean_returns = returns.mean()
     std_returns = returns.std()
     
-    # Mean returns should be small (around 0.0002, but allow for skill injection)
-    assert abs(mean_returns.mean()) < 0.002, f"Mean returns too large: {mean_returns.mean()}"
+    # Mean returns should be reasonable (accounting for skill injection)
+    # With BETA_MOM=0.035 and BETA_VAL=0.018, we expect some drift
+    assert abs(mean_returns.mean()) < 0.005, f"Mean returns too large: {mean_returns.mean()}"
     
     # Std returns should be reasonable (around 0.01-0.02)
     assert 0.005 < std_returns.mean() < 0.05, f"Std returns outside reasonable range: {std_returns.mean()}"
     
     # Check no extreme outliers
     assert (returns.abs() < 0.5).all().all(), "Found extreme returns (>50%)"
+
+
+def test_skill_injection_present(tmp_path):
+    """Test that skill injection is actually working in the synthetic data."""
+    # Generate data
+    generate(str(tmp_path))
+    
+    # Load prices
+    prices_df = pd.read_csv(tmp_path / 'prices.csv')
+    prices_df['asof_dt'] = pd.to_datetime(prices_df['asof_dt'])
+    
+    # Calculate returns
+    prices_pivot = prices_df.pivot(index='asof_dt', columns='ticker', values='close')
+    returns = prices_pivot.pct_change(fill_method=None).dropna()
+    
+    # Check that mean returns are not zero (indicating skill injection is working)
+    mean_returns = returns.mean()
+    assert abs(mean_returns.mean()) > 0.0001, f"Mean returns too small, skill injection may not be working: {mean_returns.mean()}"
+    
+    # Check that some tickers have positive mean returns and some have negative
+    # (indicating the skill injection creates cross-sectional variation)
+    positive_means = (mean_returns > 0.001).sum()
+    negative_means = (mean_returns < -0.001).sum()
+    assert positive_means > 0, "No tickers with positive mean returns"
+    assert negative_means > 0, "No tickers with negative mean returns"
 
 
 def test_fundamentals_realism(tmp_path):
