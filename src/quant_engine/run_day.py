@@ -477,21 +477,22 @@ def run(asof: str, config_path: str) -> Dict[str, Any]:
     # Return summary
     return {
         'ok_to_trade': ok_to_trade,
-        'ic_snapshot': validation_metrics['ic_snapshot'],
-        'risk': opt_diagnostics.get('risk', float('nan')),
-        'turnover': opt_diagnostics.get('turnover', float('nan')),
+        'asof': asof,
         'paths': {
             'holdings': str(output_dir / 'data' / 'outputs' / f'holdings_{asof}.csv'),
             'trades': str(output_dir / 'data' / 'outputs' / f'trades_{asof}.csv'),
             'report': str(output_dir / 'reports' / f'{asof}_report.txt')
-        }
+        },
+        'alpha_dot': opt_diagnostics.get('alpha_dot', float('nan')),
+        'risk': opt_diagnostics.get('risk', float('nan')),
+        'turnover': opt_diagnostics.get('turnover', float('nan'))
     }
 
 
 def main():
     """Main entry point with CLI argument parsing."""
     parser = argparse.ArgumentParser(description="Quant Engine Portfolio Construction")
-    parser.add_argument("--config", default="configs/config.yaml", help="Path to config file")
+    parser.add_argument("--config", required=True, help="Path to config file")
     parser.add_argument("--asof", required=True, help="Date to run (YYYY-MM-DD)")
     
     args = parser.parse_args()
@@ -499,6 +500,10 @@ def main():
     try:
         summary = run(args.asof, args.config)
         exit_code = 0 if summary['ok_to_trade'] else 1
+        
+        if summary['ok_to_trade']:
+            print(f"Report written to: {summary['paths']['report']}")
+        
         exit(exit_code)
     except Exception as e:
         logging.error(f"Pipeline failed: {e}")
