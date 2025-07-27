@@ -14,4 +14,5 @@ requires = ["setuptools>=67", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project.scripts]
-qe-run = "quant_engine.run_day:main" 
+qe-run = "quant_engine.run_day:main"
+qe-gt-align = "scripts.compare_alpha_gt:main" 
