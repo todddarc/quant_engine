@@ -8,6 +8,7 @@ src/quant_engine/prep.py
 src/quant_engine/risk.py
 src/quant_engine/run_day.py
 src/quant_engine/signals.py
+src/quant_engine/trade_filters.py
 src/quant_engine/utils.py
 src/quant_engine.egg-info/PKG-INFO
 src/quant_engine.egg-info/SOURCES.txt
@@ -24,4 +25,5 @@ tests/test_prep.py
 tests/test_risk.py
 tests/test_run_day.py
 tests/test_signals.py
+tests/test_trade_filters.py
 tests/test_utils.py

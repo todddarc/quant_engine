@@ -84,7 +84,6 @@ class TestValueEp:
         # Should only have AAPL (MSFT has no fundamentals)
         assert len(result) == 1
         assert 'AAPL' in result.index
-        assert 'MSFT' not in result.index
         assert result.name == "val_ep"
     
     def test_value_negative_eps(self):
@@ -225,6 +224,7 @@ class TestMomentum12m1mGap:
         prices_df = pd.DataFrame(data)
         
         asof_dt = dates[-1]
+        
         result = momentum_12m_1m_gap(prices_df, asof_dt, lookback=252, gap=21)
         
         # Should return empty series for insufficient history
@@ -263,76 +263,4 @@ class TestMomentum12m1mGap:
         assert result['MSFT'] < 0
         
         # Should be sorted by index
-        assert list(result.index) == sorted(result.index)
-
-
-class TestMomentumSignal:
-    """Test momentum signal generation."""
-    
-    def test_generate_momentum_signal_basic(self):
-        """Test basic momentum signal generation."""
-        pytest.skip("not implemented")
-    
-    def test_generate_momentum_signal_with_gap(self):
-        """Test momentum signal with gap period."""
-        pytest.skip("not implemented")
-    
-    def test_generate_momentum_signal_insufficient_data(self):
-        """Test momentum signal with insufficient historical data."""
-        pytest.skip("not implemented")
-
-
-class TestValueSignal:
-    """Test value signal generation."""
-    
-    def test_generate_value_signal_basic(self):
-        """Test basic value signal generation."""
-        pytest.skip("not implemented")
-    
-    def test_generate_value_signal_missing_data(self):
-        """Test value signal with missing fundamental data."""
-        pytest.skip("not implemented")
-
-
-class TestSignalProcessing:
-    """Test signal processing functions."""
-    
-    def test_winsorize_signals(self):
-        """Test signal winsorization."""
-        pytest.skip("not implemented")
-    
-    def test_z_score_signals(self):
-        """Test signal z-scoring."""
-        pytest.skip("not implemented")
-    
-    def test_sector_neutralize(self):
-        """Test sector neutralization."""
-        pytest.skip("not implemented")
-
-
-class TestSignalCombination:
-    """Test signal combination functionality."""
-    
-    def test_combine_signals_equal_weights(self):
-        """Test signal combination with equal weights."""
-        pytest.skip("not implemented")
-    
-    def test_combine_signals_custom_weights(self):
-        """Test signal combination with custom weights."""
-        pytest.skip("not implemented")
-    
-    def test_combine_signals_missing_data(self):
-        """Test signal combination with missing data."""
-        pytest.skip("not implemented")
-
-
-class TestSignalValidation:
-    """Test signal validation functionality."""
-    
-    def test_calculate_signal_ic_basic(self):
-        """Test basic IC calculation."""
-        pytest.skip("not implemented")
-    
-    def test_calculate_signal_ic_rolling_window(self):
-        """Test rolling window IC calculation."""
-        pytest.skip("not implemented") 
+        assert list(result.index) == sorted(result.index) 
