@@ -22,6 +22,9 @@ ENV/
 *.swp
 *.swo
 
+# Cursor IDE files
+.cursor/
+
 # OS files
 .DS_Store
 Thumbs.db
