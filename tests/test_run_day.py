@@ -228,7 +228,8 @@ def test_run_day_success(tmp_path):
     
     # Check summary structure
     assert 'ok_to_trade' in summary
-    assert 'ic_snapshot' in summary
+    assert 'asof' in summary
+    assert 'alpha_dot' in summary
     assert 'risk' in summary
     assert 'turnover' in summary
     assert 'paths' in summary
