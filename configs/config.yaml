@@ -56,6 +56,12 @@ logging:
 performance:
   random_seed: null  # Set to integer for deterministic results
 
+# Trading configuration (optional)
+trading:
+  aum: null              # Assets under management (needed for min_notional filtering)
+  min_weight: 0.0005     # Minimum trade size as weight (5 bps)
+  min_notional: null     # Minimum trade size in currency (e.g., 10000.0 for $10k floor)
+
 # Output configuration (optional)
 output:
   top_risk_contributors_n: 5  # Number of top risk contributors to show 

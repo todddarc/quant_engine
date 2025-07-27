@@ -25,6 +25,7 @@ from .optimize import mean_variance_opt
 from .checks import check_schema, check_missingness, check_turnover, check_sector_exposure, aggregate_checks, check_schema_drift, check_extreme_values
 from .utils import compute_next_period_returns, cross_sectional_ic, compute_ic_series, summarize_ic, decile_portfolio_returns, setup_logging, validate_config, set_random_seed
 from .risk import returns_from_prices, shrink_cov, validate_covariance_matrix, marginal_risk_contribution
+from .trade_filters import apply_no_trade_band
 
 
 def load_config(config_path: str) -> Dict[str, Any]:
@@ -333,7 +334,10 @@ def write_report(asof: str, validation_metrics: Dict[str, Any],
                 opt_diagnostics: Dict[str, Any], check_results: Dict[str, Any],
                 ok_to_trade: bool, output_dir: Path, risk_diag_line: Optional[str] = None,
                 drift_prices: Optional[Dict[str, Any]] = None, drift_fund: Optional[Dict[str, Any]] = None,
-                drift_sects: Optional[Dict[str, Any]] = None, extreme: Optional[Dict[str, Any]] = None) -> None:
+                drift_sects: Optional[Dict[str, Any]] = None, extreme: Optional[Dict[str, Any]] = None,
+                freeze_mask: Optional[pd.Series] = None, tf_stats: Optional[Dict[str, Any]] = None,
+                reopt_used: bool = False, reopt_success: bool = True, min_weight: float = 0.0005,
+                min_notional: Optional[float] = None, aum: Optional[float] = None) -> None:
     """Write text report."""
     # Create reports directory
     (output_dir / 'reports').mkdir(parents=True, exist_ok=True)
@@ -365,6 +369,24 @@ def write_report(asof: str, validation_metrics: Dict[str, Any],
         # Risk diagnostics
         f.write("RISK DIAGNOSTICS\n")
         f.write(f"{risk_diag_line}\n\n")
+        
+        # Trade filters
+        f.write("TRADE FILTERS\n")
+        if freeze_mask is not None and freeze_mask.any():
+            mw_str = f"{min_weight:.4f}"
+            mn_str = "N/A" if min_notional is None else f"{float(min_notional):.0f}"
+            aum_str = "N/A" if aum is None else f"{float(aum):.0f}"
+            reopt_str = "used" if reopt_used and reopt_success else ("failed" if reopt_used else "not used")
+            f.write(
+                f"Frozen names: {int(freeze_mask.sum())}, "
+                f"min_weight={mw_str}, min_notional={mn_str}, AUM={aum_str}, reopt={reopt_str}\n"
+            )
+            f.write(
+                f"Turnover {tf_stats['turnover_before']:.4f} -> {tf_stats['turnover_after']:.4f} (after filter)\n"
+            )
+        else:
+            f.write("No small-trade filtering applied.\n")
+        f.write("\n")
         
         # Data diagnostics (WARN-only)
         f.write("DATA DIAGNOSTICS (WARN-only)\n")
@@ -424,6 +446,15 @@ def run(asof: str, config_path: str) -> Dict[str, Any]:
     if config.get("performance", {}).get("random_seed") is not None:
         set_random_seed(config["performance"]["random_seed"])
     
+    # Read trading thresholds from config with safe defaults
+    trade_cfg = config.get("trading", {})
+    min_weight = float(trade_cfg.get("min_weight", 0.0005))       # 5 bps
+    min_notional = trade_cfg.get("min_notional", None)            # e.g., 10000.0
+    if isinstance(min_notional, str) and min_notional.strip() == "":
+        min_notional = None
+    aum = trade_cfg.get("aum", None)                              # e.g., 10_000_000
+    aum = float(aum) if aum is not None else None
+    
     logging.info(f"Loaded config from {config_path}")
     
     # Load data via data_io
@@ -468,6 +499,63 @@ def run(asof: str, config_path: str) -> Dict[str, Any]:
     # Check if optimizer failed and fell back to prior weights
     optimizer_failed = not opt_diagnostics.get('success', True)
     
+    # Apply trade filters and re-optimize if needed
+    freeze_mask = pd.Series(False, index=weights.index)
+    tf_stats = {"turnover_before": 0.0, "turnover_after": 0.0}
+    reopt_used = False
+    reopt_success = True
+    
+    if not optimizer_failed:  # Only apply filters if first optimization succeeded
+        try:
+            # Compute today's price vector (Series) aligned to tickers
+            prices_today = prices_df.loc[prices_df["asof_dt"] == asof_dt, ["ticker","close"]].set_index("ticker")["close"]
+            
+            # Align prev_weights to match weights index
+            prev_w_aligned = prev_weights.reindex(weights.index).fillna(0.0)
+            
+            # Apply band
+            nw_frozen_view, freeze_mask, tf_stats = apply_no_trade_band(
+                prev_w=prev_w_aligned, new_w=weights, prices=prices_today, aum=aum,
+                min_weight=min_weight, min_notional=min_notional
+            )
+            
+            # If nothing to freeze (all False), keep weights as-is
+            if freeze_mask.any():
+                try:
+                    # Build fixed_weights = prev_w for frozen names
+                    fixed_w = prev_w_aligned.where(freeze_mask, np.nan).dropna()
+                    
+                    # Re-run optimizer with same inputs but fixed_weights
+                    res2 = mean_variance_opt(
+                        alpha=alpha,
+                        Sigma=Sigma,
+                        sectors_map=sectors_ser,
+                        prev_w=prev_weights,
+                        risk_aversion=config['optimization']['risk_aversion'],
+                        w_max=config['optimization']['w_max'],
+                        sector_cap=config['optimization']['sector_cap'],
+                        turnover_cap=config['optimization']['turnover_cap'],
+                        fixed_weights=fixed_w,   # NEW
+                    )
+                    if res2[1].get("success", False):
+                        new_w_reopt = res2[0]
+                        weights = new_w_reopt  # adopt the re-optimized solution
+                        reopt_used = True
+                        # Recompute stats after re-opt
+                        prices_today = prices_today.reindex(weights.index)
+                        # Update tf_stats to reflect real after state
+                        tf_stats["turnover_after"] = 0.5 * float(np.abs(weights - prev_w_aligned).sum())
+                    else:
+                        reopt_used = True
+                        reopt_success = False
+                        logging.warning("Re-opt with frozen names failed; keeping first solution. Message: %s", res2[1].get("message",""))
+                except Exception as e:
+                    reopt_used = True
+                    reopt_success = False
+                    logging.warning("Re-opt with frozen names errored; keeping first solution. Error: %s", e)
+        except Exception as e:
+            logging.warning("Trade filtering failed; keeping first solution. Error: %s", e)
+    
     # Run pre-trade checks
     ok_to_trade, check_results = run_pre_trade_checks(
         prices_df, sectors_ser, prev_weights, weights, asof_dt, config
@@ -511,7 +599,8 @@ def run(asof: str, config_path: str) -> Dict[str, Any]:
     path_hold = write_holdings(outdir, asof, weights)
     path_tr = write_trades(outdir, asof, weights, prev_weights)
     write_report(asof, validation_metrics, opt_diagnostics, check_results, ok_to_trade, outdir, risk_diag_line,
-                 drift_prices, drift_fund, drift_sects, extreme)
+                 drift_prices, drift_fund, drift_sects, extreme, freeze_mask, tf_stats, reopt_used, reopt_success,
+                 min_weight, min_notional, aum)
     logging.info("Wrote output files")
     
     # Return summary
