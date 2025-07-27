@@ -25,7 +25,7 @@ quant_engine/
 │   ├── checks.py         # Pre-trade validation
 │   ├── utils.py          # Utilities
 │   └── run_day.py        # Main execution pipeline
-├── src/engine/           # Backward compatibility shim
+
 ├── tests/                # Unit tests
 ├── data/                 # Input data files
 ├── reports/              # Output files
@@ -47,9 +47,8 @@ pip install numpy pandas scipy pyyaml pytest
 # Run tests
 python -m pytest tests/
 
-# Execute portfolio construction (multiple options)
+# Execute portfolio construction
 python -m src.quant_engine.run_day --asof 2024-01-15 --config configs/config.yaml
-python -m src.engine.run_day --asof 2024-01-15 --config configs/config.yaml  # legacy path
 qe-run --asof 2024-01-15 --config configs/config.yaml  # console script (after installation)
 ```
 
