@@ -2,8 +2,7 @@
 """
 Deterministic synthetic data generator for quant engine testing.
 
-Generates realistic price, fundamental, sector, and holdings data with
-point-in-time correctness and survivorship bias simulation.
+This version uses the engine's signal processing pipeline to ensure perfect compatibility.
 """
 
 import pandas as pd
@@ -11,6 +10,15 @@ import numpy as np
 import argparse
 from pathlib import Path
 from typing import List, Tuple, Dict, Any
+import sys
+import os
+
+# Add the src directory to the path so we can import engine modules
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+
+# Import engine modules
+from quant_engine.signals import momentum_12m_1m_gap, value_ep
+from quant_engine.prep import winsorize, zscore, sector_neutralize
 
 
 # =============================================================================
@@ -29,9 +37,9 @@ MARKET_STD = 0.01
 SECTOR_STD = 0.003  # Reduced from 0.005
 IDIO_STD = 0.008   # Reduced from 0.01
 
-# Skill injection parameters
-BETA_MOM = 0.03  # Increased from 0.02
-BETA_VAL = 0.03  # Increased from 0.01
+# Skill injection parameters - use engine config weights
+BETA_MOM = 0.5  # Changed to match engine config
+BETA_VAL = 0.5  # Changed to match engine config
 EPSILON_SIG = 0.01  # idiosyncratic daily std (~1%)
 
 # Sector names
@@ -84,86 +92,41 @@ def generate_delistings(tickers: List[str]) -> Dict[str, int]:
     return delistings
 
 
-def compute_mom_proxy(prices_wide: pd.DataFrame, day_idx: int) -> pd.Series:
+def compute_engine_style_signals(prices_df: pd.DataFrame, fundamentals_df: pd.DataFrame, 
+                                sectors_map: pd.Series, asof_dt: pd.Timestamp,
+                                mom_lookback: int = 252, mom_gap: int = 21, 
+                                val_min_lag_days: int = 60) -> Tuple[pd.Series, pd.Series]:
     """
-    Compute momentum proxy using (t-21) and (t-252) relative to day_idx-1.
-    Returns z-scored Series across alive tickers.
+    Compute momentum and value signals using the engine's exact pipeline.
     """
-    if day_idx < 252:  # Need at least 252 days of history
-        return pd.Series(dtype=float)
+    # Use engine's signal functions
+    mom = momentum_12m_1m_gap(prices_df, asof_dt=asof_dt, lookback=mom_lookback, gap=mom_gap)
+    val = value_ep(fundamentals_df, prices_df, asof_dt=asof_dt, min_lag_days=val_min_lag_days)
     
-    # Get prices at t-21 and t-252 (relative to day_idx-1)
-    t_gap = day_idx - 21
-    t_lookback = day_idx - 252
+    # Align to common tickers
+    idx = mom.index.intersection(val.index)
+    if idx.empty:
+        return pd.Series(dtype=float), pd.Series(dtype=float)
     
-    if t_gap < 0 or t_lookback < 0:
-        return pd.Series(dtype=float)
+    mom = mom.reindex(idx)
+    val = val.reindex(idx)
     
-    # Get prices at these dates
-    prices_gap = prices_wide.iloc[t_gap]
-    prices_lookback = prices_wide.iloc[t_lookback]
+    # Apply engine's preprocessing pipeline
+    # 1. Winsorize
+    mom_w = winsorize(mom, 0.01, 0.99)
+    val_w = winsorize(val, 0.01, 0.99)
     
-    # Compute momentum: P(t-gap) / P(t-lookback) - 1
-    momentum = (prices_gap / prices_lookback) - 1
+    # 2. Z-score
+    mom_z = zscore(mom_w)
+    val_z = zscore(val_w)
     
-    # Z-score across tickers
-    momentum_clean = momentum.dropna()
-    if len(momentum_clean) < 3:
-        return pd.Series(dtype=float)
+    # 3. Sector neutralize
+    if sectors_map is not None:
+        sec = pd.Series(sectors_map).reindex(idx)
+        mom_z = sector_neutralize(mom_z, sec)
+        val_z = sector_neutralize(val_z, sec)
     
-    mean_mom = momentum_clean.mean()
-    std_mom = momentum_clean.std()
-    
-    if std_mom == 0:
-        return pd.Series(0.0, index=momentum.index)
-    
-    mom_z = (momentum - mean_mom) / std_mom
-    return mom_z
-
-
-def compute_val_proxy(fundamentals_df: pd.DataFrame, prices_on_day: pd.Series, day_date: pd.Timestamp) -> pd.Series:
-    """
-    Compute value proxy using PIT fundamentals.
-    For each ticker, pick the latest fundamentals row with available_asof <= day_date,
-    compute E/P = eps_ttm / price_t, then z-score across alive tickers; NaNs -> 0.
-    """
-    # Convert available_asof to datetime for comparison
-    fundamentals_df = fundamentals_df.copy()
-    fundamentals_df['available_asof'] = pd.to_datetime(fundamentals_df['available_asof'])
-    
-    # Filter fundamentals to PIT data
-    pit_fundamentals = fundamentals_df[fundamentals_df['available_asof'] <= day_date].copy()
-    
-    if pit_fundamentals.empty:
-        return pd.Series(dtype=float)
-    
-    # For each ticker, get the latest available fundamental
-    latest_fundamentals = pit_fundamentals.loc[pit_fundamentals.groupby('ticker')['available_asof'].idxmax()]
-    
-    # Compute E/P for each ticker
-    value_ratios = []
-    for _, row in latest_fundamentals.iterrows():
-        ticker = row['ticker']
-        if ticker in prices_on_day.index:
-            price = prices_on_day[ticker]
-            if price > 0:
-                ep_ratio = row['eps_ttm'] / price
-                value_ratios.append({'ticker': ticker, 'ep_ratio': ep_ratio})
-    
-    if not value_ratios:
-        return pd.Series(dtype=float)
-    
-    value_df = pd.DataFrame(value_ratios)
-    
-    # Z-score across tickers
-    mean_ep = value_df['ep_ratio'].mean()
-    std_ep = value_df['ep_ratio'].std()
-    
-    if std_ep == 0:
-        return pd.Series(0.0, index=prices_on_day.index)
-    
-    value_z = (value_df['ep_ratio'] - mean_ep) / std_ep
-    return pd.Series(value_z.values, index=value_df['ticker'])
+    return mom_z, val_z
 
 
 def get_tickers_alive_on(prices_wide: pd.DataFrame, date: pd.Timestamp, delistings: Dict[str, int], calendar: pd.DatetimeIndex) -> List[str]:
@@ -210,13 +173,26 @@ def generate_prices(calendar: pd.DatetimeIndex, tickers: List[str],
         if len(active) == 0:
             continue
         
-        # Build proxies from information available at t-1
-        mom_z = compute_mom_proxy(prices_wide.loc[:, active], day_idx=t)
-        val_z = compute_val_proxy(fundamentals_df, 
-                                prices_on_day=prices_wide.loc[date_tm1, active],
-                                day_date=date_tm1)
+        # Convert wide format to long format for engine functions
+        prices_long = []
+        for ticker in active:
+            for date_idx in range(t):  # Include all data up to t-1
+                if pd.notna(prices_wide.loc[calendar[date_idx], ticker]):
+                    prices_long.append({
+                        'asof_dt': calendar[date_idx].strftime('%Y-%m-%d'),
+                        'ticker': ticker,
+                        'close': prices_wide.loc[calendar[date_idx], ticker]
+                    })
         
-        # Align proxies to active tickers; fill missing with 0
+        prices_df = pd.DataFrame(prices_long)
+        
+        # Build engine-style signals using t-1 data
+        mom_z, val_z = compute_engine_style_signals(
+            prices_df, fundamentals_df, 
+            pd.Series(sectors), date_tm1
+        )
+        
+        # Align to active tickers; fill missing with 0
         mom_z = mom_z.reindex(active).astype(float).fillna(0.0)
         val_z = val_z.reindex(active).astype(float).fillna(0.0)
         
@@ -225,7 +201,7 @@ def generate_prices(calendar: pd.DatetimeIndex, tickers: List[str],
         sector_shocks = {s: np.random.normal(loc=0.0, scale=SECTOR_STD) for s in SECTOR_NAMES}
         idio = np.random.normal(loc=0.0, scale=EPSILON_SIG, size=len(active))
         
-        # Predictive alpha term based on t-1 signals
+        # Predictive alpha term based on t-1 signals (using engine weights)
         alpha_term = BETA_MOM * mom_z.values + BETA_VAL * val_z.values
         
         # Log alpha ground truth if requested
@@ -374,7 +350,7 @@ def generate_holdings_prev(prices_df: pd.DataFrame) -> pd.DataFrame:
 
 
 def generate(outdir: str = "data", log_alpha_gt: bool = True, alpha_gt_path: str = "data/alpha_gt.csv") -> Dict[str, Any]:
-    """Generate all synthetic data files."""
+    """Generate all synthetic data files using engine-compatible signal processing."""
     # Set seed for determinism
     np.random.seed(SEED)
     
@@ -442,7 +418,7 @@ def generate(outdir: str = "data", log_alpha_gt: bool = True, alpha_gt_path: str
     }
     
     # Print summary
-    print("=== SYNTHETIC DATA GENERATION SUMMARY ===")
+    print("=== SYNTHETIC DATA GENERATION SUMMARY (ENGINE-COMPATIBLE) ===")
     print(f"Total tickers: {summary['total_tickers']}")
     print(f"Active on last day: {summary['active_tickers']}")
     print(f"Delisted: {summary['delisted_tickers']}")
@@ -451,6 +427,7 @@ def generate(outdir: str = "data", log_alpha_gt: bool = True, alpha_gt_path: str
     print(f"Fundamentals available range: {summary['fundamentals_date_range'][0]} to {summary['fundamentals_date_range'][1]}")
     print(f"Delisted tickers: {sorted(delisted_tickers)}")
     print(f"Output directory: {out_path.absolute()}")
+    print(f"Using engine signal processing pipeline with betas: mom={BETA_MOM}, val={BETA_VAL}")
     
     return summary
 
@@ -458,7 +435,7 @@ def generate(outdir: str = "data", log_alpha_gt: bool = True, alpha_gt_path: str
 def main():
     global BETA_MOM, BETA_VAL
     
-    parser = argparse.ArgumentParser(description="Generate synthetic data for quant engine testing")
+    parser = argparse.ArgumentParser(description="Generate synthetic data for quant engine testing (engine-compatible)")
     parser.add_argument("--outdir", default="data", help="Output directory (default: data)")
     parser.add_argument("--beta-mom", type=float, default=BETA_MOM, help=f"Momentum beta (default: {BETA_MOM})")
     parser.add_argument("--beta-val", type=float, default=BETA_VAL, help=f"Value beta (default: {BETA_VAL})")

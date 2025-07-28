@@ -5,8 +5,12 @@ Tests for synthetic data generator.
 import pytest
 import pandas as pd
 import numpy as np
+import sys
 from pathlib import Path
-from data_fetch.make_synth_data import generate
+
+# Add data_fetch to path
+sys.path.insert(0, str(Path(__file__).parent.parent / 'data_fetch'))
+from make_synth_data import generate
 
 
 def test_prices_schema_and_monotonic_dates(tmp_path):

@@ -5,7 +5,7 @@ Tests for data_io module.
 import pytest
 import pandas as pd
 from pathlib import Path
-from src.quant_engine.data_io import (
+from quant_engine.data_io import (
     load_prices, load_fundamentals, load_sectors, load_holdings,
     write_holdings, write_trades, unique_dates, next_day_exists
 )

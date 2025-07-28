@@ -5,7 +5,7 @@ Tests for risk module.
 import pytest
 import pandas as pd
 import numpy as np
-from src.quant_engine.risk import (
+from quant_engine.risk import (
     validate_covariance_matrix, returns_from_prices, shrink_cov,
     marginal_risk_contribution
 )

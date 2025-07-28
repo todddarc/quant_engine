@@ -1,2 +1,3 @@
 [console_scripts]
+qe-gt-align = scripts.compare_alpha_gt:main
 qe-run = quant_engine.run_day:main

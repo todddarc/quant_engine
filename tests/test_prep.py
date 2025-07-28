@@ -5,7 +5,7 @@ Tests for prep module.
 import pytest
 import pandas as pd
 import numpy as np
-from src.quant_engine.prep import winsorize, zscore, sector_neutralize
+from quant_engine.prep import winsorize, zscore, sector_neutralize
 
 
 class TestWinsorize:

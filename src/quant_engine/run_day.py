@@ -92,16 +92,28 @@ def build_signals(prices_df: pd.DataFrame, fundamentals_df: pd.DataFrame,
     momentum_aligned = momentum.loc[common_tickers]
     value_aligned = value.loc[common_tickers]
     
-    # Preprocess signals
-    momentum_processed = sector_neutralize(
-        zscore(winsorize(momentum_aligned, 0.01, 0.99)),
-        sectors_ser
-    )
+    # Preprocess signals based on config flags
+    preprocessing_config = config.get('signals', {}).get('preprocessing', {})
+    winsorize_flag = preprocessing_config.get('winsorize', True)
+    sector_neutralize_flag = preprocessing_config.get('sector_neutralize', True)
+    winsorize_bounds = preprocessing_config.get('winsorize_bounds', [0.01, 0.99])
     
-    value_processed = sector_neutralize(
-        zscore(winsorize(value_aligned, 0.01, 0.99)),
-        sectors_ser
-    )
+    # Apply winsorization if enabled
+    if winsorize_flag:
+        momentum_processed = winsorize(momentum_aligned, winsorize_bounds[0], winsorize_bounds[1])
+        value_processed = winsorize(value_aligned, winsorize_bounds[0], winsorize_bounds[1])
+    else:
+        momentum_processed = momentum_aligned
+        value_processed = value_aligned
+    
+    # Apply z-scoring
+    momentum_processed = zscore(momentum_processed)
+    value_processed = zscore(value_processed)
+    
+    # Apply sector neutralization if enabled
+    if sector_neutralize_flag:
+        momentum_processed = sector_neutralize(momentum_processed, sectors_ser)
+        value_processed = sector_neutralize(value_processed, sectors_ser)
     
     # Combine signals
     alpha = (config['signals']['weights']['momentum'] * momentum_processed + 
@@ -169,16 +181,28 @@ def compute_validation_metrics(prices_df: pd.DataFrame, alpha: pd.Series,
                     momentum_aligned = momentum_aligned.loc[common_tickers]
                     value_aligned = value_aligned.loc[common_tickers]
                     
-                    # Same preprocessing as today
-                    momentum_processed = sector_neutralize(
-                        zscore(winsorize(momentum_aligned, 0.01, 0.99)),
-                        sectors_ser
-                    )
+                    # Same preprocessing as today (using config flags)
+                    preprocessing_config = config.get('signals', {}).get('preprocessing', {})
+                    winsorize_flag = preprocessing_config.get('winsorize', True)
+                    sector_neutralize_flag = preprocessing_config.get('sector_neutralize', True)
+                    winsorize_bounds = preprocessing_config.get('winsorize_bounds', [0.01, 0.99])
                     
-                    value_processed = sector_neutralize(
-                        zscore(winsorize(value_aligned, 0.01, 0.99)),
-                        sectors_ser
-                    )
+                    # Apply winsorization if enabled
+                    if winsorize_flag:
+                        momentum_processed = winsorize(momentum_aligned, winsorize_bounds[0], winsorize_bounds[1])
+                        value_processed = winsorize(value_aligned, winsorize_bounds[0], winsorize_bounds[1])
+                    else:
+                        momentum_processed = momentum_aligned
+                        value_processed = value_aligned
+                    
+                    # Apply z-scoring
+                    momentum_processed = zscore(momentum_processed)
+                    value_processed = zscore(value_processed)
+                    
+                    # Apply sector neutralization if enabled
+                    if sector_neutralize_flag:
+                        momentum_processed = sector_neutralize(momentum_processed, sectors_ser)
+                        value_processed = sector_neutralize(value_processed, sectors_ser)
                     
                     # Combine signals
                     date_signals = (config['signals']['weights']['momentum'] * momentum_processed + 

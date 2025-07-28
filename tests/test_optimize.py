@@ -5,7 +5,7 @@ Tests for optimize module.
 import pytest
 import pandas as pd
 import numpy as np
-from src.quant_engine.optimize import mean_variance_opt
+from quant_engine.optimize import mean_variance_opt
 
 
  

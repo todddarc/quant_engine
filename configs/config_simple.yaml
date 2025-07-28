@@ -1,5 +1,6 @@
-# Quant Engine Configuration
+# Quant Engine Configuration - Simple Mode (No Winsorization, No Sector Neutralization)
 # Configuration file for the quantitative equity portfolio construction engine
+# This config turns off winsorization and sector neutralization for testing
 
 # Data file paths
 data:
@@ -22,10 +23,10 @@ signals:
     momentum: 0.5
     value: 0.5
   
-  # Signal preprocessing flags (can be turned off for testing)
+  # Signal preprocessing flags - TURNED OFF FOR TESTING
   preprocessing:
-    winsorize: true       # Apply winsorization (cap extreme values)
-    sector_neutralize: true  # Apply sector neutralization
+    winsorize: false      # Apply winsorization (cap extreme values) - DISABLED
+    sector_neutralize: false  # Apply sector neutralization - DISABLED
     winsorize_bounds: [0.01, 0.99]  # Winsorization bounds (lower, upper)
 
 # Risk Model Parameters

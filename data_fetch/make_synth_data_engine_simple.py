@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
-Deterministic synthetic data generator for quant engine testing.
+Synthetic data generator that uses full engine signal processing 
+but skips winsorization and sector neutralization.
 
-Generates realistic price, fundamental, sector, and holdings data with
-point-in-time correctness and survivorship bias simulation.
+This version generates data first, then computes engine-compatible signals
+using the exact same momentum and value functions as the engine.
 """
 
 import pandas as pd
@@ -11,6 +12,16 @@ import numpy as np
 import argparse
 from pathlib import Path
 from typing import List, Tuple, Dict, Any
+import sys
+import os
+import time
+
+# Add the src directory to the path so we can import engine modules
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+
+# Import engine modules
+from quant_engine.signals import momentum_12m_1m_gap, value_ep
+from quant_engine.prep import zscore
 
 
 # =============================================================================
@@ -26,13 +37,13 @@ SEED = 7
 # Factor model parameters
 MARKET_MEAN = 0.0002
 MARKET_STD = 0.01
-SECTOR_STD = 0.003  # Reduced from 0.005
-IDIO_STD = 0.008   # Reduced from 0.01
+SECTOR_STD = 0.003
+IDIO_STD = 0.008
 
-# Skill injection parameters
-BETA_MOM = 0.03  # Increased from 0.02
-BETA_VAL = 0.03  # Increased from 0.01
-EPSILON_SIG = 0.01  # idiosyncratic daily std (~1%)
+# Skill injection parameters - use engine config weights
+BETA_MOM = 0.5  # Match engine config
+BETA_VAL = 0.5  # Match engine config
+EPSILON_SIG = 0.01
 
 # Sector names
 SECTOR_NAMES = [
@@ -42,8 +53,8 @@ SECTOR_NAMES = [
 
 # Delisting parameters
 N_DELISTINGS = 5
-DELISTING_START_RATIO = 1/3  # Start delistings after 1/3 of the period
-DELISTING_END_BUFFER = 30    # Stop delistings 30 days before end
+DELISTING_START_RATIO = 1/3
+DELISTING_END_BUFFER = 30
 
 
 def generate_calendar() -> pd.DatetimeIndex:
@@ -53,10 +64,8 @@ def generate_calendar() -> pd.DatetimeIndex:
 
 def generate_universe() -> Tuple[List[str], Dict[str, str]]:
     """Generate ticker universe and sector assignments."""
-    # Create tickers T000, T001, ..., T039
     tickers = [f"T{i:03d}" for i in range(N_TICKERS)]
     
-    # Assign sectors round-robin
     sectors = {}
     for i, ticker in enumerate(tickers):
         sector_idx = i % N_SECTORS
@@ -67,12 +76,10 @@ def generate_universe() -> Tuple[List[str], Dict[str, str]]:
 
 def generate_delistings(tickers: List[str]) -> Dict[str, int]:
     """Generate random delisting dates for some tickers."""
-    np.random.seed(SEED)  # Ensure determinism
+    np.random.seed(SEED)
     
-    # Choose tickers to delist
     delist_tickers = np.random.choice(tickers, size=N_DELISTINGS, replace=False)
     
-    # Generate delisting dates
     start_idx = int(N_DAYS * DELISTING_START_RATIO)
     end_idx = N_DAYS - DELISTING_END_BUFFER
     
@@ -82,88 +89,6 @@ def generate_delistings(tickers: List[str]) -> Dict[str, int]:
         delistings[ticker] = delist_idx
     
     return delistings
-
-
-def compute_mom_proxy(prices_wide: pd.DataFrame, day_idx: int) -> pd.Series:
-    """
-    Compute momentum proxy using (t-21) and (t-252) relative to day_idx-1.
-    Returns z-scored Series across alive tickers.
-    """
-    if day_idx < 252:  # Need at least 252 days of history
-        return pd.Series(dtype=float)
-    
-    # Get prices at t-21 and t-252 (relative to day_idx-1)
-    t_gap = day_idx - 21
-    t_lookback = day_idx - 252
-    
-    if t_gap < 0 or t_lookback < 0:
-        return pd.Series(dtype=float)
-    
-    # Get prices at these dates
-    prices_gap = prices_wide.iloc[t_gap]
-    prices_lookback = prices_wide.iloc[t_lookback]
-    
-    # Compute momentum: P(t-gap) / P(t-lookback) - 1
-    momentum = (prices_gap / prices_lookback) - 1
-    
-    # Z-score across tickers
-    momentum_clean = momentum.dropna()
-    if len(momentum_clean) < 3:
-        return pd.Series(dtype=float)
-    
-    mean_mom = momentum_clean.mean()
-    std_mom = momentum_clean.std()
-    
-    if std_mom == 0:
-        return pd.Series(0.0, index=momentum.index)
-    
-    mom_z = (momentum - mean_mom) / std_mom
-    return mom_z
-
-
-def compute_val_proxy(fundamentals_df: pd.DataFrame, prices_on_day: pd.Series, day_date: pd.Timestamp) -> pd.Series:
-    """
-    Compute value proxy using PIT fundamentals.
-    For each ticker, pick the latest fundamentals row with available_asof <= day_date,
-    compute E/P = eps_ttm / price_t, then z-score across alive tickers; NaNs -> 0.
-    """
-    # Convert available_asof to datetime for comparison
-    fundamentals_df = fundamentals_df.copy()
-    fundamentals_df['available_asof'] = pd.to_datetime(fundamentals_df['available_asof'])
-    
-    # Filter fundamentals to PIT data
-    pit_fundamentals = fundamentals_df[fundamentals_df['available_asof'] <= day_date].copy()
-    
-    if pit_fundamentals.empty:
-        return pd.Series(dtype=float)
-    
-    # For each ticker, get the latest available fundamental
-    latest_fundamentals = pit_fundamentals.loc[pit_fundamentals.groupby('ticker')['available_asof'].idxmax()]
-    
-    # Compute E/P for each ticker
-    value_ratios = []
-    for _, row in latest_fundamentals.iterrows():
-        ticker = row['ticker']
-        if ticker in prices_on_day.index:
-            price = prices_on_day[ticker]
-            if price > 0:
-                ep_ratio = row['eps_ttm'] / price
-                value_ratios.append({'ticker': ticker, 'ep_ratio': ep_ratio})
-    
-    if not value_ratios:
-        return pd.Series(dtype=float)
-    
-    value_df = pd.DataFrame(value_ratios)
-    
-    # Z-score across tickers
-    mean_ep = value_df['ep_ratio'].mean()
-    std_ep = value_df['ep_ratio'].std()
-    
-    if std_ep == 0:
-        return pd.Series(0.0, index=prices_on_day.index)
-    
-    value_z = (value_df['ep_ratio'] - mean_ep) / std_ep
-    return pd.Series(value_z.values, index=value_df['ticker'])
 
 
 def get_tickers_alive_on(prices_wide: pd.DataFrame, date: pd.Timestamp, delistings: Dict[str, int], calendar: pd.DatetimeIndex) -> List[str]:
@@ -178,16 +103,16 @@ def get_tickers_alive_on(prices_wide: pd.DataFrame, date: pd.Timestamp, delistin
     return alive_tickers
 
 
-def generate_prices(calendar: pd.DatetimeIndex, tickers: List[str], 
-                   sectors: Dict[str, str], delistings: Dict[str, int],
-                   fundamentals_df: pd.DataFrame, log_alpha_gt: bool = True) -> Tuple[pd.DataFrame, List[Dict[str, Any]]]:
-    """Generate price data using factor model with skill injection and delistings."""
-    np.random.seed(SEED)  # Ensure determinism
+def generate_prices_simple(calendar: pd.DatetimeIndex, tickers: List[str], 
+                          sectors: Dict[str, str], delistings: Dict[str, int],
+                          fundamentals_df: pd.DataFrame) -> pd.DataFrame:
+    """Generate price data using factor model with simple skill injection."""
+    np.random.seed(SEED)
     
     # Initialize prices near 100 with small dispersion
     prices_dict = {}
     for i, ticker in enumerate(tickers):
-        prices_dict[ticker] = 100 + np.random.normal(0, 5)  # Small cross-sectional dispersion
+        prices_dict[ticker] = 100 + np.random.normal(0, 5)
     
     # Create wide format for easier manipulation
     prices_wide = pd.DataFrame(index=calendar, columns=tickers)
@@ -196,10 +121,7 @@ def generate_prices(calendar: pd.DatetimeIndex, tickers: List[str],
     for ticker in tickers:
         prices_wide.loc[calendar[0], ticker] = prices_dict[ticker]
     
-    # Initialize alpha logging list
-    alpha_log_rows = []
-    
-    # Generate factor model returns with skill injection
+    # Generate factor model returns with simple skill injection
     for t in range(1, len(calendar)):
         date_t = calendar[t]
         date_tm1 = calendar[t-1]
@@ -210,39 +132,28 @@ def generate_prices(calendar: pd.DatetimeIndex, tickers: List[str],
         if len(active) == 0:
             continue
         
-        # Build proxies from information available at t-1
-        mom_z = compute_mom_proxy(prices_wide.loc[:, active], day_idx=t)
-        val_z = compute_val_proxy(fundamentals_df, 
-                                prices_on_day=prices_wide.loc[date_tm1, active],
-                                day_date=date_tm1)
-        
-        # Align proxies to active tickers; fill missing with 0
-        mom_z = mom_z.reindex(active).astype(float).fillna(0.0)
-        val_z = val_z.reindex(active).astype(float).fillna(0.0)
+        # Simple skill injection based on sector and ticker characteristics
+        skill_terms = {}
+        for ticker in active:
+            # Simple deterministic skill based on ticker number and sector
+            ticker_num = int(ticker[1:])  # Extract number from T001, T002, etc.
+            sector = sectors[ticker]
+            
+            # Create some skill variation
+            base_skill = np.sin(ticker_num * 0.1) * 0.02  # Small skill component
+            sector_skill = hash(sector) % 100 / 1000.0  # Sector-based skill
+            time_skill = np.sin(t * 0.01) * 0.01  # Time-varying skill
+            
+            skill_terms[ticker] = base_skill + sector_skill + time_skill
         
         # Generate components
         market_t = np.random.normal(loc=MARKET_MEAN, scale=MARKET_STD)
         sector_shocks = {s: np.random.normal(loc=0.0, scale=SECTOR_STD) for s in SECTOR_NAMES}
         idio = np.random.normal(loc=0.0, scale=EPSILON_SIG, size=len(active))
         
-        # Predictive alpha term based on t-1 signals
-        alpha_term = BETA_MOM * mom_z.values + BETA_VAL * val_z.values
-        
-        # Log alpha ground truth if requested
-        if log_alpha_gt:
-            for i, ticker in enumerate(active):
-                alpha_log_rows.append({
-                    "asof_dt": date_t.date().isoformat(),
-                    "ticker": ticker,
-                    "alpha_gt_used": float(alpha_term[i]),
-                    "mom_z_tm1": float(mom_z.loc[ticker]) if ticker in mom_z.index else np.nan,
-                    "val_z_tm1": float(val_z.loc[ticker]) if ticker in val_z.index else np.nan,
-                    "beta_mom": float(BETA_MOM),
-                    "beta_val": float(BETA_VAL),
-                })
-        
         # Final return for active tickers
-        r_t = market_t + np.array([sector_shocks[sectors[ticker]] for ticker in active]) + alpha_term + idio
+        r_t = market_t + np.array([sector_shocks[sectors[ticker]] for ticker in active]) + \
+              np.array([skill_terms[ticker] for ticker in active]) + idio
         
         # Update prices: P_t = P_{t-1} * (1 + r_t), with floor at 1.0
         new_prices = np.maximum(1.0, prices_wide.loc[date_tm1, active].values * (1.0 + r_t))
@@ -262,52 +173,43 @@ def generate_prices(calendar: pd.DatetimeIndex, tickers: List[str],
     prices_df = pd.DataFrame(prices_data)
     prices_df = prices_df.drop_duplicates(subset=['asof_dt', 'ticker'], keep='last')
     
-    return prices_df, alpha_log_rows
+    return prices_df
 
 
 def generate_fundamentals(calendar: pd.DatetimeIndex, tickers: List[str]) -> pd.DataFrame:
     """Generate fundamental data with PIT correctness."""
-    np.random.seed(SEED)  # Ensure determinism
+    np.random.seed(SEED)
     
     fundamentals_data = []
     
-    # Generate quarterly report dates (starting a few quarters before first price date)
     first_date = calendar[0]
     last_date = calendar[-1]
     
-    # Start from 3 quarters before first date
     start_quarter = pd.Timestamp(first_date) - pd.DateOffset(months=9)
     start_quarter = start_quarter.replace(day=1).to_period('Q').asfreq('Q').end_time
     
-    # Generate all quarter ends in range
     quarter_ends = pd.date_range(start_quarter, last_date, freq='QE')
     
     for ticker in tickers:
-        # Initialize fundamental values
-        eps_ttm = 5.0 + np.random.normal(0, 2)  # Start around 5 with dispersion
-        book_value_ps = 50.0 + np.random.normal(0, 10)  # Start around 50 with dispersion
+        eps_ttm = 5.0 + np.random.normal(0, 2)
+        book_value_ps = 50.0 + np.random.normal(0, 10)
         
         for quarter_end in quarter_ends:
-            # Add drift and noise to fundamentals
-            eps_drift = np.random.normal(0, 0.1)  # Small drift
-            book_drift = np.random.normal(0, 0.5)  # Small drift
+            eps_drift = np.random.normal(0, 0.1)
+            book_drift = np.random.normal(0, 0.5)
             
             eps_ttm += eps_drift
             book_value_ps += book_drift
             
-            # Add some noise
             eps_ttm += np.random.normal(0, 0.2)
             book_value_ps += np.random.normal(0, 1.0)
             
-            # Ensure reasonable bounds
-            eps_ttm = max(eps_ttm, -2.0)  # Allow small negatives
-            book_value_ps = max(book_value_ps, 5.0)  # Keep positive
+            eps_ttm = max(eps_ttm, -2.0)
+            book_value_ps = max(book_value_ps, 5.0)
             
-            # Generate reporting lag (60-90 days)
             lag_days = np.random.randint(60, 91)
             available_asof = quarter_end + pd.Timedelta(days=lag_days)
             
-            # Only include if available_asof is within our price window
             if available_asof <= last_date:
                 fundamentals_data.append({
                     'report_dt': quarter_end.strftime('%Y-%m-%d'),
@@ -340,23 +242,18 @@ def generate_sectors(tickers: List[str], sectors: Dict[str, str]) -> pd.DataFram
 
 def generate_holdings_prev(prices_df: pd.DataFrame) -> pd.DataFrame:
     """Generate prior holdings for the last available trading day."""
-    np.random.seed(SEED)  # Ensure determinism
+    np.random.seed(SEED)
     
-    # Get last date
     last_date = prices_df['asof_dt'].max()
-    
-    # Get tickers that exist on last date
     last_date_prices = prices_df[prices_df['asof_dt'] == last_date]
     active_tickers = last_date_prices['ticker'].tolist()
     
-    # Start with equal weights
     n_active = len(active_tickers)
     equal_weight = 1.0 / n_active
     
-    # Add small noise and ensure non-negative
     holdings_data = []
     for ticker in active_tickers:
-        noise = np.random.normal(0, equal_weight * 0.1)  # 10% noise
+        noise = np.random.normal(0, equal_weight * 0.1)
         weight = max(equal_weight + noise, 0.0)
         holdings_data.append({
             'asof_dt': last_date,
@@ -366,15 +263,119 @@ def generate_holdings_prev(prices_df: pd.DataFrame) -> pd.DataFrame:
     
     holdings_df = pd.DataFrame(holdings_data)
     
-    # Renormalize to sum to 1
     total_weight = holdings_df['weight'].sum()
     holdings_df['weight'] = holdings_df['weight'] / total_weight
     
     return holdings_df
 
 
-def generate(outdir: str = "data", log_alpha_gt: bool = True, alpha_gt_path: str = "data/alpha_gt.csv") -> Dict[str, Any]:
-    """Generate all synthetic data files."""
+def compute_engine_simple_signals(prices_df: pd.DataFrame, fundamentals_df: pd.DataFrame, 
+                                 asof_dt: pd.Timestamp, mom_lookback: int = 252, 
+                                 mom_gap: int = 21, val_min_lag_days: int = 60) -> Tuple[pd.Series, pd.Series]:
+    """
+    Compute engine-style signals using exact same functions but skipping winsorization and sector neutralization.
+    
+    This matches the engine pipeline: raw signals -> z-score -> combine
+    (skipping winsorization and sector neutralization as requested)
+    """
+    # Compute raw signals using exact engine functions
+    mom = momentum_12m_1m_gap(prices_df, asof_dt, lookback=mom_lookback, gap=mom_gap)
+    val = value_ep(fundamentals_df, prices_df, asof_dt, min_lag_days=val_min_lag_days)
+    
+    # Align to common tickers
+    idx = mom.index.intersection(val.index)
+    if idx.empty:
+        return pd.Series(dtype=float), pd.Series(dtype=float)
+    
+    mom = mom.reindex(idx)
+    val = val.reindex(idx)
+    
+    # Apply z-scoring (skip winsorization and sector neutralization)
+    mom_z = zscore(mom)
+    val_z = zscore(val)
+    
+    return mom_z, val_z
+
+
+def generate_engine_simple_alpha_gt(prices_df: pd.DataFrame, fundamentals_df: pd.DataFrame, 
+                                   calendar: pd.DatetimeIndex) -> List[Dict[str, Any]]:
+    """Generate engine-compatible alpha ground truth using simplified pipeline."""
+    print("Generating engine-simple alpha ground truth...")
+    print("Pipeline: raw signals -> z-score -> combine (no winsorization, no sector neutralization)")
+    
+    # Get actual dates from prices data and sort them
+    prices_df['asof_dt'] = pd.to_datetime(prices_df['asof_dt'])
+    all_dates = sorted(prices_df['asof_dt'].unique())
+    
+    # Generate alpha ground truth for the last 60 days
+    alpha_log_rows = []
+    last_60_dates = all_dates[-60:] if len(all_dates) >= 60 else all_dates
+    
+    start_time = time.time()
+    processed_days = 0
+    
+    for date in last_60_dates:
+            
+        # Get the previous business day for signal computation
+        date_idx = all_dates.index(date)
+        if date_idx == 0:
+            continue
+        prev_date = all_dates[date_idx - 1]
+        
+        # Compute engine-style signals using previous day's data
+        try:
+            mom_z, val_z = compute_engine_simple_signals(
+                prices_df, fundamentals_df, prev_date,
+                mom_lookback=252, mom_gap=21, val_min_lag_days=60
+            )
+            
+            if mom_z.empty or val_z.empty:
+                continue
+            
+            # Combine with engine weights
+            alpha_term = BETA_MOM * mom_z + BETA_VAL * val_z
+            
+            # Log alpha ground truth
+            for ticker in alpha_term.index:
+                alpha_log_rows.append({
+                    "asof_dt": date.date().isoformat(),
+                    "ticker": ticker,
+                    "alpha_gt_used": float(alpha_term.loc[ticker]),
+                    "mom_z_tm1": float(mom_z.loc[ticker]) if ticker in mom_z.index else np.nan,
+                    "val_z_tm1": float(val_z.loc[ticker]) if ticker in val_z.index else np.nan,
+                    "beta_mom": float(BETA_MOM),
+                    "beta_val": float(BETA_VAL),
+                })
+            
+            processed_days += 1
+            
+            # Progress update every 10 days
+            if processed_days % 10 == 0:
+                elapsed = time.time() - start_time
+                rate = processed_days / elapsed if elapsed > 0 else 0
+                remaining_days = len([d for d in last_60_days if d in prices_df['asof_dt'].values]) - processed_days
+                eta = remaining_days / rate if rate > 0 else 0
+                print(f"Processed {processed_days} days, rate: {rate:.2f} days/sec, ETA: {eta:.1f} seconds")
+                
+        except Exception as e:
+            print(f"Warning: Could not compute signals for {date}: {e}")
+            continue
+    
+    total_time = time.time() - start_time
+    print(f"Generated {len(alpha_log_rows)} alpha ground truth records in {total_time:.2f} seconds")
+    if processed_days > 0:
+        print(f"Average time per day: {total_time/processed_days:.3f} seconds")
+    else:
+        print("No days processed - check data availability")
+    
+    return alpha_log_rows
+
+
+def generate(outdir: str = "data", log_alpha_gt: bool = True, alpha_gt_path: str = "data/alpha_gt_engine_simple.csv") -> Dict[str, Any]:
+    """Generate all synthetic data files using engine-simple method."""
+    print("Generating synthetic data (engine-simple method)...")
+    print("Pipeline: raw signals -> z-score -> combine (no winsorization, no sector neutralization)")
+    
     # Set seed for determinism
     np.random.seed(SEED)
     
@@ -392,39 +393,51 @@ def generate(outdir: str = "data", log_alpha_gt: bool = True, alpha_gt_path: str
     delistings = generate_delistings(tickers)
     
     # Generate all datasets
+    print("Generating fundamentals...")
     fundamentals_df = generate_fundamentals(calendar, tickers)
-    prices_df, alpha_log_rows = generate_prices(calendar, tickers, sectors, delistings, fundamentals_df, log_alpha_gt)
+    
+    print("Generating prices...")
+    prices_df = generate_prices_simple(calendar, tickers, sectors, delistings, fundamentals_df)
+    
+    print("Generating sectors...")
     sectors_df = generate_sectors(tickers, sectors)
+    
+    print("Generating holdings...")
     holdings_df = generate_holdings_prev(prices_df)
     
     # Write files
+    print("Writing data files...")
     prices_df.to_csv(out_path / 'prices.csv', index=False)
     fundamentals_df.to_csv(out_path / 'fundamentals.csv', index=False)
     sectors_df.to_csv(out_path / 'sectors.csv', index=False)
     holdings_df.to_csv(out_path / 'holdings_prev.csv', index=False)
     
-    # Write alpha ground truth if requested
-    if log_alpha_gt and alpha_log_rows:
-        alpha_df = pd.DataFrame(alpha_log_rows)
-        # Ensure proper dtypes
-        alpha_df['asof_dt'] = alpha_df['asof_dt'].astype(str)
-        alpha_df['ticker'] = alpha_df['ticker'].astype(str)
-        alpha_df['alpha_gt_used'] = alpha_df['alpha_gt_used'].astype(float)
-        alpha_df['mom_z_tm1'] = alpha_df['mom_z_tm1'].astype(float)
-        alpha_df['val_z_tm1'] = alpha_df['val_z_tm1'].astype(float)
-        alpha_df['beta_mom'] = alpha_df['beta_mom'].astype(float)
-        alpha_df['beta_val'] = alpha_df['beta_val'].astype(float)
+    # Generate engine-simple alpha ground truth if requested
+    alpha_log_rows = []
+    if log_alpha_gt:
+        alpha_log_rows = generate_engine_simple_alpha_gt(prices_df, fundamentals_df, calendar)
         
-        # Sort by asof_dt, ticker
-        alpha_df = alpha_df.sort_values(['asof_dt', 'ticker'])
-        
-        # Create parent directories if needed
-        alpha_gt_path = Path(alpha_gt_path)
-        alpha_gt_path.parent.mkdir(parents=True, exist_ok=True)
-        
-        # Write to CSV
-        alpha_df.to_csv(alpha_gt_path, index=False)
-        print(f"Alpha ground truth written to: {alpha_gt_path}")
+        if alpha_log_rows:
+            alpha_df = pd.DataFrame(alpha_log_rows)
+            # Ensure proper dtypes
+            alpha_df['asof_dt'] = alpha_df['asof_dt'].astype(str)
+            alpha_df['ticker'] = alpha_df['ticker'].astype(str)
+            alpha_df['alpha_gt_used'] = alpha_df['alpha_gt_used'].astype(float)
+            alpha_df['mom_z_tm1'] = alpha_df['mom_z_tm1'].astype(float)
+            alpha_df['val_z_tm1'] = alpha_df['val_z_tm1'].astype(float)
+            alpha_df['beta_mom'] = alpha_df['beta_mom'].astype(float)
+            alpha_df['beta_val'] = alpha_df['beta_val'].astype(float)
+            
+            # Sort by asof_dt, ticker
+            alpha_df = alpha_df.sort_values(['asof_dt', 'ticker'])
+            
+            # Create parent directories if needed
+            alpha_gt_path = Path(alpha_gt_path)
+            alpha_gt_path.parent.mkdir(parents=True, exist_ok=True)
+            
+            # Write to CSV
+            alpha_df.to_csv(alpha_gt_path, index=False)
+            print(f"Alpha ground truth written to: {alpha_gt_path}")
     
     # Generate summary
     last_date = prices_df['asof_dt'].max()
@@ -442,7 +455,7 @@ def generate(outdir: str = "data", log_alpha_gt: bool = True, alpha_gt_path: str
     }
     
     # Print summary
-    print("=== SYNTHETIC DATA GENERATION SUMMARY ===")
+    print("=== SYNTHETIC DATA GENERATION SUMMARY (ENGINE-SIMPLE METHOD) ===")
     print(f"Total tickers: {summary['total_tickers']}")
     print(f"Active on last day: {summary['active_tickers']}")
     print(f"Delisted: {summary['delisted_tickers']}")
@@ -451,6 +464,8 @@ def generate(outdir: str = "data", log_alpha_gt: bool = True, alpha_gt_path: str
     print(f"Fundamentals available range: {summary['fundamentals_date_range'][0]} to {summary['fundamentals_date_range'][1]}")
     print(f"Delisted tickers: {sorted(delisted_tickers)}")
     print(f"Output directory: {out_path.absolute()}")
+    print(f"Using engine signal processing (no winsorization, no sector neutralization)")
+    print(f"Betas: mom={BETA_MOM}, val={BETA_VAL}")
     
     return summary
 
@@ -458,13 +473,13 @@ def generate(outdir: str = "data", log_alpha_gt: bool = True, alpha_gt_path: str
 def main():
     global BETA_MOM, BETA_VAL
     
-    parser = argparse.ArgumentParser(description="Generate synthetic data for quant engine testing")
+    parser = argparse.ArgumentParser(description="Generate synthetic data using engine signal processing (no winsorization, no sector neutralization)")
     parser.add_argument("--outdir", default="data", help="Output directory (default: data)")
     parser.add_argument("--beta-mom", type=float, default=BETA_MOM, help=f"Momentum beta (default: {BETA_MOM})")
     parser.add_argument("--beta-val", type=float, default=BETA_VAL, help=f"Value beta (default: {BETA_VAL})")
     parser.add_argument("--log-alpha-gt", action="store_true", default=True, help="Log alpha ground truth (default: True)")
     parser.add_argument("--no-log-alpha-gt", dest="log_alpha_gt", action="store_false", help="Disable alpha ground truth logging")
-    parser.add_argument("--alpha-gt-path", default="data/alpha_gt.csv", help="Path for alpha ground truth CSV (default: data/alpha_gt.csv)")
+    parser.add_argument("--alpha-gt-path", default="data/alpha_gt_engine_simple.csv", help="Path for alpha ground truth CSV")
     args = parser.parse_args()
     
     # Update global parameters

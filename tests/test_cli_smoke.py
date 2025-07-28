@@ -9,7 +9,7 @@ import yaml
 import subprocess
 import sys
 from pathlib import Path
-from src.quant_engine.run_day import run
+from quant_engine.run_day import run
 
 
 def create_minimal_test_data(tmp_path: Path) -> None:

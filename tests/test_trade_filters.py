@@ -5,7 +5,7 @@ Tests for trade_filters module.
 import pytest
 import pandas as pd
 import numpy as np
-from src.quant_engine.trade_filters import small_trade_mask, apply_no_trade_band
+from quant_engine.trade_filters import small_trade_mask, apply_no_trade_band
 
 
 class TestSmallTradeMask:

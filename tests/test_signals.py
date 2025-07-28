@@ -5,7 +5,7 @@ Tests for signals module.
 import pytest
 import pandas as pd
 import numpy as np
-from src.quant_engine.signals import momentum_12m_1m_gap, value_ep
+from quant_engine.signals import momentum_12m_1m_gap, value_ep
 
 
 class TestValueEp:
