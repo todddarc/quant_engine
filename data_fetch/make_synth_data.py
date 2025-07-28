@@ -12,6 +12,66 @@ import argparse
 from pathlib import Path
 from typing import List, Tuple, Dict, Any
 
+from pandas.tseries.offsets import BDay
+from quant_engine.signals import momentum_12m_1m_gap, value_ep
+from quant_engine.prep import zscore, winsorize
+
+
+# =============================================================================
+# HELPER FUNCTIONS
+# =============================================================================
+
+def _zscore_vec(y: np.ndarray) -> np.ndarray:
+    y = y.astype(float)
+    mu = np.nanmean(y)
+    sd = np.nanstd(y, ddof=1)
+    if not np.isfinite(sd) or sd <= 0:
+        return np.zeros_like(y)
+    return (y - mu) / sd
+
+def _proj_perp(X: np.ndarray, y: np.ndarray, eps: float = 1e-6) -> np.ndarray:
+    """
+    Return the residual of projecting y onto columns of X (per-day cross-section).
+    (I - P_X) y, with ridge eps for stability.
+    X: n x p, y: n
+    """
+    if X.size == 0 or y.size == 0:
+        return y
+    XtX = X.T @ X
+    # ridge for invertibility
+    XtX.flat[::XtX.shape[0]+1] += eps
+    coef = np.linalg.solve(XtX, X.T @ y)
+    y_hat = X @ coef
+    return y - y_hat
+
+def _build_engine_features_tminus1(prices_df, fundamentals_df, asof_t,
+                                   lookback=252, gap=21,
+                                   min_lag=60, winsor=(0.0, 1.0)):
+    """
+    Build z_mom and z_val exactly like the engine, at t-1.
+    - momentum_12m_1m_gap(prices, asof=t-1, lookback, gap)
+    - value_ep(fundamentals, prices, asof=t-1, min_lag_days)
+    - optional winsorize BEFORE cross-sectional zscore (match engine if needed)
+    """
+    tm1 = pd.to_datetime(asof_t) - BDay(1)
+    mom = momentum_12m_1m_gap(prices_df, asof_dt=tm1,
+                              lookback=lookback, gap=gap)
+    val = value_ep(fundamentals_df, prices_df, asof_dt=tm1,
+                   min_lag_days=min_lag)
+    idx = mom.index.intersection(val.index)
+    if idx.empty:
+        return idx, pd.Series(dtype=float), pd.Series(dtype=float), np.empty((0,2))
+    mom = mom.reindex(idx)
+    val = val.reindex(idx)
+    if winsor is not None:
+        lo, hi = float(winsor[0]), float(winsor[1])
+        mom = winsorize(mom, lo, hi)
+        val = winsorize(val, lo, hi)
+    mom_z = zscore(mom)
+    val_z = zscore(val)
+    X = np.column_stack([mom_z.values, val_z.values])  # n x 2
+    return idx, mom_z, val_z, X
+
 
 # =============================================================================
 # PARAMETERS (easy to tweak)
@@ -25,14 +85,22 @@ SEED = 7
 
 # Factor model parameters
 MARKET_MEAN = 0.0002
-MARKET_STD = 0.01
-SECTOR_STD = 0.003  # Reduced from 0.005
-IDIO_STD = 0.008   # Reduced from 0.01
+MARKET_STD = 0.02    # Further increased - more market noise
+SECTOR_STD = 0.008   # Further increased - more sector noise
 
-# Skill injection parameters
-BETA_MOM = 0.03  # Increased from 0.02
-BETA_VAL = 0.03  # Increased from 0.01
-EPSILON_SIG = 0.01  # idiosyncratic daily std (~1%)
+# === Hard-mode DGP knobs (tweak to tune difficulty) ===
+CAPTURE = 0.15        # expected daily projection R^2 (0.2 hard, 0.8 easy) - FURTHER REDUCED
+ALPHA_SCALE = 0.008   # scales alpha vs noise (affects IC, not capture R^2) - FURTHER REDUCED
+W_MOM, W_VAL = 0.50, 0.50   # engine mixing used to form z_eng
+WINSOR_PCTS = (0.0, 1.0)    # (low, high) winsor for raw mom/val before zscore; (0,1) = off
+
+# === Ensure we compute features exactly like the engine ===
+LOOKBACK_DAYS = 252
+GAP_DAYS = 21
+MIN_LAG_DAYS = 60     # interpret consistently with value_ep
+
+# Idiosyncratic noise
+EPSILON_SIG = 0.025  # idiosyncratic daily std (~2.5%) - FURTHER INCREASED
 
 # Sector names
 SECTOR_NAMES = [
@@ -41,7 +109,7 @@ SECTOR_NAMES = [
 ]
 
 # Delisting parameters
-N_DELISTINGS = 5
+N_DELISTINGS = 5  # No delistings for short test periods
 DELISTING_START_RATIO = 1/3  # Start delistings after 1/3 of the period
 DELISTING_END_BUFFER = 30    # Stop delistings 30 days before end
 
@@ -210,36 +278,112 @@ def generate_prices(calendar: pd.DatetimeIndex, tickers: List[str],
         if len(active) == 0:
             continue
         
-        # Build proxies from information available at t-1
-        mom_z = compute_mom_proxy(prices_wide.loc[:, active], day_idx=t)
-        val_z = compute_val_proxy(fundamentals_df, 
-                                prices_on_day=prices_wide.loc[date_tm1, active],
-                                day_date=date_tm1)
+        # === 1) Build engine features exactly like the engine, at t-1 ===
+        # Convert wide prices to long format for engine functions
+        prices_long = []
+        for ticker in active:
+            for i in range(t):
+                if pd.notna(prices_wide.iloc[i][ticker]):
+                    prices_long.append({
+                        'asof_dt': calendar[i].strftime('%Y-%m-%d'),
+                        'ticker': ticker,
+                        'close': prices_wide.iloc[i][ticker]
+                    })
+        prices_df = pd.DataFrame(prices_long)
         
-        # Align proxies to active tickers; fill missing with 0
-        mom_z = mom_z.reindex(active).astype(float).fillna(0.0)
-        val_z = val_z.reindex(active).astype(float).fillna(0.0)
+        idx, mom_z, val_z, X = _build_engine_features_tminus1(
+            prices_df, fundamentals_df, asof_t=date_t,
+            lookback=LOOKBACK_DAYS, gap=GAP_DAYS, min_lag=MIN_LAG_DAYS,
+            winsor=WINSOR_PCTS
+        )
+        if len(idx) == 0:
+            # no names to inject today; continue with shocks and price update as usual
+            alpha_term = np.zeros(len(active))
+            if log_alpha_gt:
+                for i, ticker in enumerate(active):
+                    alpha_log_rows.append({
+                        "asof_dt": date_t.date().isoformat(),
+                        "ticker": ticker,
+                        "alpha_gt_used": 0.0,
+                        "mom_z_tm1": np.nan,
+                        "val_z_tm1": np.nan,
+                        "z_eng_tm1": np.nan,
+                        "u_perp_tm1": np.nan,
+                        "capture_tgt": float(CAPTURE),
+                    })
+        else:
+            # Combined "engine-spanned" direction (inside span of X)
+            z_eng = _zscore_vec(W_MOM * mom_z.reindex(idx).values + W_VAL * val_z.reindex(idx).values)
+            
+            # === 2) Build a simple "hard" raw vector h_raw outside your engine ===
+            # Keep it simple but realistic: interaction + square + mild style
+            rng = np.random.RandomState(SEED + int(pd.to_datetime(date_t).strftime("%Y%m%d")))
+            inter = (mom_z.reindex(idx).values * val_z.reindex(idx).values)
+            sqmom = (mom_z.reindex(idx).values ** 2)
+            style = rng.normal(size=len(idx))
+            h_raw = 0.5 * inter + 0.3 * sqmom + 0.2 * style
+            
+            # If you have a sectors Series (ticker->sector) available locally as sectors_ser,
+            # you can add a tiny weekly sector tilt to h_raw. If not, skip this block.
+            try:
+                sectors_ser = pd.Series(sectors)
+                sec = sectors_ser.reindex(idx).fillna("UNK")
+                uniq_secs = np.unique(sec.values)
+                week_id = int(pd.to_datetime(date_t).strftime("%G%V"))
+                star_sec = uniq_secs[week_id % len(uniq_secs)]
+                tilt = (sec.values == star_sec).astype(float)
+                h_raw = h_raw + 0.2 * tilt
+            except Exception:
+                pass  # ok to proceed without sector tilt
+            
+            # === 3) Orthogonalize to engine span and standardize ===
+            u_raw = _proj_perp(X, h_raw, eps=1e-6)   # residual ⟂ span{z_mom, z_val}
+            u = _zscore_vec(u_raw)
+            
+            # === 4) Mix with capture knob and scale ===
+            c = float(CAPTURE)
+            c = 0.0 if c < 0.0 else (1.0 if c > 1.0 else c)
+            alpha_true_unit = np.sqrt(c) * z_eng + np.sqrt(1.0 - c) * u
+            alpha_true = float(ALPHA_SCALE) * alpha_true_unit
+            
+            # Map back to active tickers
+            alpha_term = np.zeros(len(active))
+            for i, ticker in enumerate(active):
+                if ticker in idx:
+                    ticker_idx = list(idx).index(ticker)
+                    alpha_term[i] = alpha_true[ticker_idx]
+            
+            # === 6) Log ground truth for diagnostics ===
+            if log_alpha_gt:
+                for i, ticker in enumerate(active):
+                    if ticker in idx:
+                        ticker_idx = list(idx).index(ticker)
+                        alpha_log_rows.append({
+                            "asof_dt": date_t.date().isoformat(),
+                            "ticker": ticker,
+                            "alpha_gt_used": float(alpha_true[ticker_idx]),
+                            "mom_z_tm1": float(mom_z.loc[ticker]),
+                            "val_z_tm1": float(val_z.loc[ticker]),
+                            "z_eng_tm1": float(z_eng[ticker_idx]),
+                            "u_perp_tm1": float(u[ticker_idx]),
+                            "capture_tgt": float(c),
+                        })
+                    else:
+                        alpha_log_rows.append({
+                            "asof_dt": date_t.date().isoformat(),
+                            "ticker": ticker,
+                            "alpha_gt_used": 0.0,
+                            "mom_z_tm1": np.nan,
+                            "val_z_tm1": np.nan,
+                            "z_eng_tm1": np.nan,
+                            "u_perp_tm1": np.nan,
+                            "capture_tgt": float(c),
+                        })
         
         # Generate components
         market_t = np.random.normal(loc=MARKET_MEAN, scale=MARKET_STD)
         sector_shocks = {s: np.random.normal(loc=0.0, scale=SECTOR_STD) for s in SECTOR_NAMES}
         idio = np.random.normal(loc=0.0, scale=EPSILON_SIG, size=len(active))
-        
-        # Predictive alpha term based on t-1 signals
-        alpha_term = BETA_MOM * mom_z.values + BETA_VAL * val_z.values
-        
-        # Log alpha ground truth if requested
-        if log_alpha_gt:
-            for i, ticker in enumerate(active):
-                alpha_log_rows.append({
-                    "asof_dt": date_t.date().isoformat(),
-                    "ticker": ticker,
-                    "alpha_gt_used": float(alpha_term[i]),
-                    "mom_z_tm1": float(mom_z.loc[ticker]) if ticker in mom_z.index else np.nan,
-                    "val_z_tm1": float(val_z.loc[ticker]) if ticker in val_z.index else np.nan,
-                    "beta_mom": float(BETA_MOM),
-                    "beta_val": float(BETA_VAL),
-                })
         
         # Final return for active tickers
         r_t = market_t + np.array([sector_shocks[sectors[ticker]] for ticker in active]) + alpha_term + idio
@@ -412,8 +556,9 @@ def generate(outdir: str = "data", log_alpha_gt: bool = True, alpha_gt_path: str
         alpha_df['alpha_gt_used'] = alpha_df['alpha_gt_used'].astype(float)
         alpha_df['mom_z_tm1'] = alpha_df['mom_z_tm1'].astype(float)
         alpha_df['val_z_tm1'] = alpha_df['val_z_tm1'].astype(float)
-        alpha_df['beta_mom'] = alpha_df['beta_mom'].astype(float)
-        alpha_df['beta_val'] = alpha_df['beta_val'].astype(float)
+        alpha_df['z_eng_tm1'] = alpha_df['z_eng_tm1'].astype(float)
+        alpha_df['u_perp_tm1'] = alpha_df['u_perp_tm1'].astype(float)
+        alpha_df['capture_tgt'] = alpha_df['capture_tgt'].astype(float)
         
         # Sort by asof_dt, ticker
         alpha_df = alpha_df.sort_values(['asof_dt', 'ticker'])
@@ -425,6 +570,18 @@ def generate(outdir: str = "data", log_alpha_gt: bool = True, alpha_gt_path: str
         # Write to CSV
         alpha_df.to_csv(alpha_gt_path, index=False)
         print(f"Alpha ground truth written to: {alpha_gt_path}")
+        
+        # quick consistency check (tiny sample)
+        try:
+            sample = alpha_df.tail(200)
+            # Correlate alpha_gt_used with z_eng_tm1 cross-sectionally for the last day
+            last_day = sample["asof_dt"].iloc[-1]
+            sub = sample[sample["asof_dt"] == last_day]
+            if not sub.empty:
+                corr = pd.Series(sub["alpha_gt_used"]).corr(pd.Series(sub["z_eng_tm1"]), method="spearman")
+                print(f"[Sanity] Spearman(engine vs alpha) on last day {last_day}: {corr:.3f}")
+        except Exception as e:
+            print(f"[Sanity] Alignment check skipped: {e}")
     
     # Generate summary
     last_date = prices_df['asof_dt'].max()
@@ -456,20 +613,12 @@ def generate(outdir: str = "data", log_alpha_gt: bool = True, alpha_gt_path: str
 
 
 def main():
-    global BETA_MOM, BETA_VAL
-    
     parser = argparse.ArgumentParser(description="Generate synthetic data for quant engine testing")
     parser.add_argument("--outdir", default="data", help="Output directory (default: data)")
-    parser.add_argument("--beta-mom", type=float, default=BETA_MOM, help=f"Momentum beta (default: {BETA_MOM})")
-    parser.add_argument("--beta-val", type=float, default=BETA_VAL, help=f"Value beta (default: {BETA_VAL})")
     parser.add_argument("--log-alpha-gt", action="store_true", default=True, help="Log alpha ground truth (default: True)")
     parser.add_argument("--no-log-alpha-gt", dest="log_alpha_gt", action="store_false", help="Disable alpha ground truth logging")
     parser.add_argument("--alpha-gt-path", default="data/alpha_gt.csv", help="Path for alpha ground truth CSV (default: data/alpha_gt.csv)")
     args = parser.parse_args()
-    
-    # Update global parameters
-    BETA_MOM = args.beta_mom
-    BETA_VAL = args.beta_val
     
     generate(args.outdir, args.log_alpha_gt, args.alpha_gt_path)
 
