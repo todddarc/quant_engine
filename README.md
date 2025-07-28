@@ -46,15 +46,61 @@ pip install -e .
 
 ### Usage
 
+#### Command Line Interface (CLI)
+
+The quant engine provides a convenient CLI for running portfolio construction:
+
 ```bash
-# Run tests
-pytest tests/
+# Basic usage with CLI command
+qe-run --asof 2023-11-30 --config configs/config.yaml
 
-# Execute portfolio construction
-python -m quant_engine.run_day --asof 2024-01-15 --config configs/config.yaml
+# Alternative: direct Python module execution
+python -m quant_engine.run_day --asof 2023-11-30 --config configs/config.yaml
 
+# Check CLI help
+qe-run --help
+```
+
+#### Data Generation
+
+```bash
 # Generate synthetic test data
 python data_fetch/make_synth_data.py
+
+# Run alpha capture analysis
+python scripts/alpha_capture.py --config configs/config.yaml --alpha-gt-path data/alpha_gt.csv --asof 2023-11-30 --window 60
+```
+
+#### Testing
+
+```bash
+# Run all tests (excluding slow synthetic data tests)
+pytest
+
+# Run all tests including slow ones
+pytest -m "not slow"
+
+# Run specific test file
+pytest tests/test_run_day.py
+
+# Run tests with verbose output
+pytest -v
+```
+
+### CLI Arguments
+
+The `qe-run` command accepts the following arguments:
+
+```bash
+qe-run --asof DATE --config CONFIG_FILE [OPTIONS]
+
+Arguments:
+  --asof DATE           Date to run portfolio construction (YYYY-MM-DD format)
+  --config CONFIG_FILE  Path to YAML configuration file
+
+Examples:
+  qe-run --asof 2023-11-30 --config configs/config.yaml
+  qe-run --asof 2024-01-15 --config configs/config_simple.yaml
 ```
 
 ### Configuration
@@ -66,6 +112,8 @@ Edit `configs/config.yaml` to customize:
 - Trading filters
 - Validation thresholds
 
+The configuration file uses YAML format for easy readability and modification.
+
 ### Input Data
 
 Required CSV files in `data/` directory:
@@ -73,6 +121,25 @@ Required CSV files in `data/` directory:
 - `fundamentals.csv`: Fundamental data with reporting lags
 - `sectors.csv`: Sector classifications
 - `holdings_prev.csv`: Prior portfolio weights
+
+### Typical Workflow
+
+1. **Generate synthetic data** (for testing):
+   ```bash
+   python data_fetch/make_synth_data.py
+   ```
+
+2. **Run portfolio construction**:
+   ```bash
+   qe-run --asof 2023-11-30 --config configs/config.yaml
+   ```
+
+3. **Analyze alpha capture** (optional):
+   ```bash
+   python scripts/alpha_capture.py --config configs/config.yaml --alpha-gt-path data/alpha_gt.csv --asof 2023-11-30 --window 60
+   ```
+
+4. **Check results** in `data/outputs/` and `reports/`
 
 ### Output
 
@@ -107,6 +174,41 @@ Generated files in `data/outputs/`:
 - **Pre-trade Checks**: Schema validation, missingness, turnover, sector exposure
 - **Data Diagnostics**: Schema drift detection, extreme value flagging
 - **Risk Diagnostics**: Covariance matrix health, top risk contributors
+
+## Troubleshooting
+
+### Common CLI Issues
+
+**Command not found: `qe-run`**
+```bash
+# Make sure the package is installed in editable mode
+pip install -e .
+
+# Or use the direct Python module
+python -m quant_engine.run_day --asof 2023-11-30 --config configs/config.yaml
+```
+
+**Date not found in prices data**
+```bash
+# Check available dates in your data
+python -c "import pandas as pd; df = pd.read_csv('data/prices.csv'); print(sorted(df['asof_dt'].unique())[-5:])"
+```
+
+**Configuration file not found**
+```bash
+# Verify the config file exists
+ls configs/
+# Use absolute path if needed
+qe-run --asof 2023-11-30 --config /full/path/to/configs/config.yaml
+```
+
+### Data Requirements
+
+Ensure your input data files have the correct format:
+- `prices.csv`: columns `asof_dt`, `ticker`, `close`
+- `fundamentals.csv`: columns `asof_dt`, `ticker`, `field`, `value`, `available_asof`
+- `sectors.csv`: columns `ticker`, `sector`
+- `holdings_prev.csv`: columns `ticker`, `weight`
 
 ## Requirements
 
