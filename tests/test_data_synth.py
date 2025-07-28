@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / 'data_fetch'))
 from make_synth_data import generate
 
 
+@pytest.mark.slow
 def test_prices_schema_and_monotonic_dates(tmp_path):
     """Test prices.csv schema and date monotonicity."""
     # Generate data
@@ -40,6 +41,7 @@ def test_prices_schema_and_monotonic_dates(tmp_path):
     assert summary['active_tickers'] < summary['total_tickers']  # Some delistings
 
 
+@pytest.mark.slow
 def test_fundamentals_pit_fields(tmp_path):
     """Test fundamentals.csv PIT correctness."""
     # Generate data
@@ -73,6 +75,7 @@ def test_fundamentals_pit_fields(tmp_path):
     assert summary['fundamentals_date_range'][0] <= summary['fundamentals_date_range'][1]
 
 
+@pytest.mark.slow
 def test_delistings_present(tmp_path):
     """Test that delistings are present."""
     # Generate data
@@ -98,6 +101,7 @@ def test_delistings_present(tmp_path):
     assert summary['active_tickers'] == len(active_tickers)
 
 
+@pytest.mark.slow
 def test_holdings_prev_valid(tmp_path):
     """Test holdings_prev.csv validity."""
     # Generate data
@@ -135,6 +139,7 @@ def test_holdings_prev_valid(tmp_path):
         f"Holdings tickers {holdings_tickers - active_tickers} not in active tickers"
 
 
+@pytest.mark.slow
 def test_sectors_schema(tmp_path):
     """Test sectors.csv schema."""
     # Generate data
@@ -155,6 +160,7 @@ def test_sectors_schema(tmp_path):
     assert sectors_df['sector'].notna().all(), "Found missing sector values"
 
 
+@pytest.mark.slow
 def test_deterministic_output(tmp_path):
     """Test that output is deterministic."""
     # Generate data twice
@@ -177,6 +183,7 @@ def test_deterministic_output(tmp_path):
             f"Files {filename} are not identical"
 
 
+@pytest.mark.slow
 def test_return_statistics_realism(tmp_path):
     """Test that return statistics are realistic (including skill injection)."""
     # Generate data
@@ -205,6 +212,7 @@ def test_return_statistics_realism(tmp_path):
     assert (returns.abs() < 0.5).all().all(), "Found extreme returns (>50%)"
 
 
+@pytest.mark.slow
 def test_skill_injection_present(tmp_path):
     """Test that skill injection is actually working in the synthetic data."""
     # Generate data
@@ -230,6 +238,7 @@ def test_skill_injection_present(tmp_path):
     assert negative_means > 0, "No tickers with negative mean returns"
 
 
+@pytest.mark.slow
 def test_fundamentals_realism(tmp_path):
     """Test that fundamentals are realistic."""
     # Generate data
@@ -257,6 +266,7 @@ def test_fundamentals_realism(tmp_path):
     assert lags.max() <= 90, f"Reporting lag too long: {lags.max()}"
 
 
+@pytest.mark.slow
 def test_sector_balance(tmp_path):
     """Test that sectors are balanced."""
     # Generate data
